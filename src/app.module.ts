@@ -39,9 +39,12 @@ import { PilotageModule } from './core/pilotage/pilotage.module';
         if (databaseUrl) {
           try {
             const parsed = new URL(databaseUrl);
+            const normalized = new URL(databaseUrl);
+            normalized.hostname = normalized.hostname.toLowerCase();
+            const normalizedDatabaseUrl = normalized.toString();
             // eslint-disable-next-line no-console
             console.log(
-              `[db] Using DATABASE_URL host=${parsed.hostname} port=${parsed.port || '5432'} db=${parsed.pathname?.replace('/', '') || ''} ssl=${useSsl}`,
+              `[db] Using DATABASE_URL host=${normalized.hostname} port=${normalized.port || '5432'} db=${normalized.pathname?.replace('/', '') || ''} ssl=${useSsl}`,
             );
           } catch {
             // eslint-disable-next-line no-console
@@ -50,7 +53,15 @@ import { PilotageModule } from './core/pilotage/pilotage.module';
 
           return {
             ...base,
-            url: databaseUrl,
+            url: (() => {
+              try {
+                const normalized = new URL(databaseUrl);
+                normalized.hostname = normalized.hostname.toLowerCase();
+                return normalized.toString();
+              } catch {
+                return databaseUrl;
+              }
+            })(),
           };
         }
 

@@ -290,17 +290,38 @@ export class UsersService {
       throw new BadRequestException('Rôle invalide');
     }
 
-    // Désactiver les rôles actifs existants
-    await this.userRolesRepo.update({ userId, isActive: true } as any, { isActive: false } as any);
+    await this.usersRepo.manager.transaction(async (manager) => {
+      const userRolesRepo = manager.getRepository(UserRole);
 
-    const userRole = this.userRolesRepo.create({
-      userId,
-      roleId: role.id,
-      assignedBy,
-      expiresAt: null,
-      isActive: true,
+      // Désactiver les rôles actifs existants (sauf le rôle cible)
+      await userRolesRepo.update(
+        { userId, isActive: true } as any,
+        { isActive: false } as any,
+      );
+
+      const existing = await userRolesRepo.findOne({ where: { userId, roleId: role.id } as any });
+
+      if (existing) {
+        await userRolesRepo.update(
+          { id: existing.id } as any,
+          {
+            assignedBy,
+            expiresAt: null,
+            isActive: true,
+          } as any,
+        );
+        return;
+      }
+
+      const userRole = userRolesRepo.create({
+        userId,
+        roleId: role.id,
+        assignedBy,
+        expiresAt: null,
+        isActive: true,
+      });
+      await userRolesRepo.save(userRole);
     });
-    await this.userRolesRepo.save(userRole);
 
     return { changed: true, userId, roleId: role.id };
   }

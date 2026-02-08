@@ -21,17 +21,69 @@ import { PilotageModule } from './core/pilotage/pilotage.module';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DB_HOST') || 'localhost',
-        port: parseInt(configService.get<string>('DB_PORT') ?? '5432', 10),
-        username: configService.get<string>('DB_USER') || 'postgres',
-        password: configService.get<string>('DB_PASSWORD') || 'postgres',
-        database: configService.get<string>('DB_NAME') || 'crm_interne',
-        autoLoadEntities: true,
-        synchronize: false,
-        logging: configService.get<string>('NODE_ENV') !== 'production',
-      }),
+      useFactory: (configService: ConfigService) => {
+        const databaseUrl =
+          configService.get<string>('DATABASE_URL') ||
+          configService.get<string>('DATABASE_PRIVATE_URL') ||
+          configService.get<string>('DATABASE_PUBLIC_URL');
+        const useSsl = configService.get<string>('DB_SSL') === 'true';
+
+        const base = {
+          type: 'postgres' as const,
+          autoLoadEntities: true,
+          synchronize: false,
+          logging: configService.get<string>('NODE_ENV') !== 'production',
+          ssl: useSsl ? ({ rejectUnauthorized: false } as const) : undefined,
+        };
+
+        if (databaseUrl) {
+          try {
+            const parsed = new URL(databaseUrl);
+            // eslint-disable-next-line no-console
+            console.log(
+              `[db] Using DATABASE_URL host=${parsed.hostname} port=${parsed.port || '5432'} db=${parsed.pathname?.replace('/', '') || ''} ssl=${useSsl}`,
+            );
+          } catch {
+            // eslint-disable-next-line no-console
+            console.log(`[db] Using DATABASE_URL (unparseable) ssl=${useSsl}`);
+          }
+
+          return {
+            ...base,
+            url: databaseUrl,
+          };
+        }
+
+        const host =
+          configService.get<string>('DB_HOST') ||
+          configService.get<string>('PGHOST') ||
+          'localhost';
+        const portRaw =
+          configService.get<string>('DB_PORT') ??
+          configService.get<string>('PGPORT') ??
+          '5432';
+        const database =
+          configService.get<string>('DB_NAME') ||
+          configService.get<string>('PGDATABASE') ||
+          'lydg';
+        // eslint-disable-next-line no-console
+        console.log(`[db] Using params host=${host} port=${portRaw} db=${database} ssl=${useSsl}`);
+
+        return {
+          ...base,
+          host,
+          port: parseInt(portRaw, 10),
+          username:
+            configService.get<string>('DB_USER') ||
+            configService.get<string>('PGUSER') ||
+            'postgres',
+          password:
+            configService.get<string>('DB_PASSWORD') ||
+            configService.get<string>('PGPASSWORD') ||
+            'crmdatabase',
+          database,
+        };
+      },
     }),
 
     TypeOrmModule.forFeature([Organization]),

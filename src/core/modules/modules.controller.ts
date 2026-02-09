@@ -19,6 +19,12 @@ export class ModulesController {
     return this.modulesService.listForTenant(tenant?.id as string);
   }
 
+  @Get('enabled')
+  async listEnabled(@Req() req: any) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    return this.modulesService.listEnabledForTenant(tenant?.id as string);
+  }
+
   @Patch(':id')
   @Roles('SUPER_ADMIN', 'ORG_ADMIN')
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateOrganizationModuleDto) {

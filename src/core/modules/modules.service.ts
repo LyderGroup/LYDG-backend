@@ -38,6 +38,35 @@ export class ModulesService {
     });
   }
 
+  async listEnabledForTenant(organizationId: string) {
+    const modules = await this.modulesRepo.find({ order: { name: 'ASC' } });
+
+    const orgModules = await this.orgModulesRepo.find({
+      where: { organizationId, isEnabled: true },
+    });
+    const orgModulesByModuleId = new Map(orgModules.map((om) => [om.moduleId, om] as const));
+
+    return modules
+      .filter((m) => orgModulesByModuleId.has(m.id))
+      .map((m) => {
+        const om = orgModulesByModuleId.get(m.id);
+        return {
+          id: m.id,
+          code: m.code,
+          name: m.name,
+          description: m.description,
+          version: m.version,
+          schemaName: m.schemaName,
+          status: m.status,
+          isCoreModule: m.isCoreModule,
+          isSystemModule: m.isSystemModule,
+          isEnabled: true,
+          enabledAt: om?.enabledAt ?? null,
+          disabledAt: om?.disabledAt ?? null,
+        };
+      });
+  }
+
   async setEnabledForTenant(
     organizationId: string,
     moduleId: string,

@@ -137,6 +137,18 @@ export class UsersService {
       throw new BadRequestException('Rôle invalide');
     }
 
+    const roleCode = (role as any).code as string | undefined;
+    const normalizedRoleCode = typeof roleCode === 'string' ? roleCode.trim() : '';
+    const isSystemRole = (role as any).isSystemRole === true;
+    const isSuperAdmin = normalizedRoleCode === 'SUPER_ADMIN';
+    const skipDepartment = isSystemRole || isSuperAdmin;
+
+    if (!skipDepartment) {
+      if (!payload.department || !String(payload.department).trim()) {
+        throw new BadRequestException('Le département est obligatoire');
+      }
+    }
+
     const user = this.usersRepo.create({
       organizationId,
       email: payload.email,
@@ -160,7 +172,7 @@ export class UsersService {
       loginCount: 0,
       externalId: null,
       metadata: {
-        department: payload.department ?? null,
+        department: skipDepartment ? null : (payload.department ?? null),
       },
       createdBy: currentUserId,
       updatedBy: currentUserId,

@@ -93,9 +93,6 @@ export class UsersController {
     if (!dto.phone || !dto.phone.trim()) {
       throw new BadRequestException('Le téléphone est obligatoire');
     }
-    if (!dto.department || !dto.department.trim()) {
-      throw new BadRequestException('Le département est obligatoire');
-    }
     if (!dto.roleId || !dto.roleId.trim()) {
       throw new BadRequestException('Le rôle est obligatoire');
     }

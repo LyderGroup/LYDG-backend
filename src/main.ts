@@ -11,8 +11,7 @@ async function bootstrap() {
   ]);
 
   app.enableCors({
-    origin: (origin, callback) => {
-      // Some clients (e.g. curl, server-to-server) may not send Origin
+    origin: (origin, callback) => { 
       if (!origin) {
         return callback(null, true);
       }

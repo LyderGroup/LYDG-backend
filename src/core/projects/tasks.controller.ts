@@ -41,6 +41,22 @@ class UpdateTaskDto {
   progress?: number;
 }
 
+class CreateSubtaskDto {
+  title!: string;
+  description?: string | null;
+  dueDate?: string | null;
+  position?: number;
+}
+
+class SetSubtaskCompletedDto {
+  isCompleted!: boolean;
+}
+
+class CreateTaskCommentDto {
+  content!: string;
+  parentCommentId?: string | null;
+}
+
 @UseGuards(RolesGuard)
 @Controller('core/projects/tasks')
 export class TasksController {
@@ -309,6 +325,188 @@ export class TasksController {
       userId: String(currentUser.id),
       contextOrganizationId: String(tenant.id),
       permissionCodes,
+    });
+  }
+
+  @Get(':id/comments')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.read.own',
+      'projects.task.read.project',
+      'projects.task.read.team',
+      'projects.task.read.department',
+      'projects.task.read.tenant',
+      'projects.task.read.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async listComments(@Req() req: any, @Param('id') id: string) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+
+    return this.projectsService.listTaskComments({
+      taskId: String(id),
+      userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
+      permissionCodes,
+    });
+  }
+
+  @Post(':id/comments')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.write.own',
+      'projects.task.write.project',
+      'projects.task.write.team',
+      'projects.task.write.department',
+      'projects.task.write.tenant',
+      'projects.task.write.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async createComment(@Req() req: any, @Param('id') id: string, @Body() dto: CreateTaskCommentDto) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+
+    return this.projectsService.createTaskComment({
+      taskId: String(id),
+      userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
+      permissionCodes,
+      dto,
+    });
+  }
+
+  @Get(':taskId/subtasks')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.read.own',
+      'projects.task.read.project',
+      'projects.task.read.team',
+      'projects.task.read.department',
+      'projects.task.read.tenant',
+      'projects.task.read.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async listSubtasks(@Req() req: any, @Param('taskId') taskId: string) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+    if (!taskId || !taskId.trim()) {
+      throw new BadRequestException('taskId is required');
+    }
+
+    return this.projectsService.listSubtasks({
+      taskId: String(taskId),
+      userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
+      permissionCodes,
+    });
+  }
+
+  @Post(':taskId/subtasks')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.write.own',
+      'projects.task.write.project',
+      'projects.task.write.team',
+      'projects.task.write.department',
+      'projects.task.write.tenant',
+      'projects.task.write.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async createSubtask(@Req() req: any, @Param('taskId') taskId: string, @Body() dto: CreateSubtaskDto) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+    if (!taskId || !taskId.trim()) {
+      throw new BadRequestException('taskId is required');
+    }
+
+    return this.projectsService.createSubtask({
+      taskId: String(taskId),
+      userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
+      dto,
+    });
+  }
+
+  @Patch(':taskId/subtasks/:subtaskId')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.write.own',
+      'projects.task.write.project',
+      'projects.task.write.team',
+      'projects.task.write.department',
+      'projects.task.write.tenant',
+      'projects.task.write.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async setSubtaskCompleted(
+    @Req() req: any,
+    @Param('taskId') taskId: string,
+    @Param('subtaskId') subtaskId: string,
+    @Body() dto: SetSubtaskCompletedDto,
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+    if (!taskId || !taskId.trim()) {
+      throw new BadRequestException('taskId is required');
+    }
+    if (!subtaskId || !subtaskId.trim()) {
+      throw new BadRequestException('subtaskId is required');
+    }
+
+    return this.projectsService.setSubtaskCompleted({
+      taskId: String(taskId),
+      subtaskId: String(subtaskId),
+      isCompleted: !!dto?.isCompleted,
+      userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
     });
   }
 }

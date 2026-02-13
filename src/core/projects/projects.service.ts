@@ -11,6 +11,8 @@ import { Organization } from '../organizations/organizations.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { ProjectMember } from './project-member.entity';
 import { Project } from './project.entity';
+import { Subtask } from './subtask.entity';
+import { TaskComment } from './task-comment.entity';
 import { Task } from './task.entity';
 
 export type ControlTowerBucket = 'overdue' | 'pending_validation' | 'in_progress' | 'completed';
@@ -25,6 +27,10 @@ export class ProjectsService {
   constructor(
     @InjectRepository(Task)
     private readonly tasksRepo: Repository<Task>,
+    @InjectRepository(Subtask)
+    private readonly subtasksRepo: Repository<Subtask>,
+    @InjectRepository(TaskComment)
+    private readonly taskCommentsRepo: Repository<TaskComment>,
     @InjectRepository(Project)
     private readonly projectsRepo: Repository<Project>,
     @InjectRepository(ProjectMember)
@@ -190,6 +196,199 @@ export class ProjectsService {
     };
   }
 
+  async getProjectById(input: {
+    id: string;
+    userId: string;
+    contextOrganizationId: string;
+  }) {
+    const project = await this.projectsRepo.findOne({
+      where: { id: input.id, organizationId: input.contextOrganizationId },
+    });
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    await this.assertUserIsProjectMemberOrThrow({
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      projectId: project.id,
+    });
+
+    const userIds = [project.createdBy, project.managerId].filter(
+      (x): x is string => typeof x === 'string' && x.trim().length > 0,
+    );
+
+    const users = userIds.length
+      ? ((await this.projectsRepo.manager.query(
+          `
+          SELECT u.id, u.first_name AS "firstName", u.last_name AS "lastName", u.email
+          FROM core.users u
+          WHERE u.id = ANY($1::uuid[])
+          `,
+          [userIds],
+        )) as Array<{ id: string; firstName: string; lastName: string; email: string }> )
+      : [];
+
+    const byId = new Map(users.map((u) => [u.id, u] as const));
+
+    return {
+      id: project.id,
+      organizationId: project.organizationId,
+      departmentId: project.departmentId,
+      name: project.name,
+      code: project.code,
+      description: project.description,
+      status: project.status,
+      priority: project.priority,
+      progress: project.progress,
+      startDate: project.startDate,
+      plannedEndDate: project.plannedEndDate,
+      actualEndDate: project.actualEndDate,
+      managerId: project.managerId,
+      createdBy: project.createdBy,
+      owner: project.createdBy ? byId.get(project.createdBy) ?? null : null,
+      manager: project.managerId ? byId.get(project.managerId) ?? null : null,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    };
+  }
+
+  async listMyTasksForProject(input: {
+    projectId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    await this.assertUserIsProjectMemberOrThrow({
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      projectId: input.projectId,
+    });
+
+    const rows = await this.tasksRepo.find({
+      where: {
+        organizationId: input.contextOrganizationId,
+        projectId: input.projectId,
+        assigneeId: input.userId,
+      },
+      order: { updatedAt: 'DESC' },
+      take: 200,
+    });
+
+    return rows.map((t) => ({
+      id: t.id,
+      organizationId: t.organizationId,
+      projectId: t.projectId,
+      title: t.title,
+      description: t.description,
+      status: t.status,
+      priority: t.priority,
+      startDate: t.startDate,
+      dueDate: t.dueDate,
+      progress: t.progress,
+      assigneeId: t.assigneeId,
+      reporterId: t.reporterId,
+      createdBy: t.createdBy,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      completedAt: t.completedAt,
+    }));
+  }
+
+  async listTaskComments(input: {
+    taskId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    const task = await this.assertTaskReadableOrThrow({
+      taskId: input.taskId,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
+    });
+
+    await this.assertUserIsProjectMemberOrThrow({
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      projectId: task.projectId,
+    });
+
+    const rows = await this.taskCommentsRepo.find({
+      where: { taskId: input.taskId },
+      relations: ['user'],
+      order: { createdAt: 'ASC' },
+      take: 500,
+    });
+
+    return rows.map((c) => ({
+      id: c.id,
+      taskId: c.taskId,
+      parentCommentId: c.parentCommentId,
+      userId: c.userId,
+      user: c.user
+        ? {
+            id: c.user.id,
+            firstName: (c.user as any).firstName,
+            lastName: (c.user as any).lastName,
+            email: (c.user as any).email,
+          }
+        : null,
+      content: c.content,
+      contentType: c.contentType,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    }));
+  }
+
+  async createTaskComment(input: {
+    taskId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+    dto: { content: string; parentCommentId?: string | null };
+  }) {
+    if (!input.dto.content || !input.dto.content.trim()) {
+      throw new BadRequestException('content is required');
+    }
+
+    const task = await this.assertTaskReadableOrThrow({
+      taskId: input.taskId,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
+    });
+
+    await this.assertUserIsProjectMemberOrThrow({
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      projectId: task.projectId,
+    });
+
+    const comment = this.taskCommentsRepo.create({
+      taskId: input.taskId,
+      parentCommentId: input.dto.parentCommentId ? String(input.dto.parentCommentId) : null,
+      userId: input.userId,
+      content: input.dto.content.trim(),
+      contentType: 'text',
+      isInternal: true,
+      visibility: 'public',
+      mentions: [],
+    });
+
+    const saved = await this.taskCommentsRepo.save(comment);
+    return {
+      id: saved.id,
+      taskId: saved.taskId,
+      parentCommentId: saved.parentCommentId,
+      userId: saved.userId,
+      content: saved.content,
+      contentType: saved.contentType,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+    };
+  }
+
   private async resolveAccessibleOrganizationIdsForUser(userId: string): Promise<string[]> {
     const userRoles = await this.userRolesRepo.find({
       where: { userId, isActive: true },
@@ -240,6 +439,183 @@ export class ProjectsService {
       return `"${s.replace(/"/g, '""')}"`;
     }
     return s;
+  }
+
+  private async recalcTaskProgressFromSubtasks(input: {
+    taskId: string;
+    contextOrganizationId: string;
+  }): Promise<void> {
+    const task = await this.tasksRepo.findOne({
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
+    });
+    if (!task) {
+      return;
+    }
+
+    const rows = (await this.subtasksRepo.manager.query(
+      `
+      SELECT
+        COUNT(*)::int AS total,
+        SUM(CASE WHEN s.is_completed = true THEN 1 ELSE 0 END)::int AS done
+      FROM module_b_projects.subtasks s
+      WHERE s.task_id = $1
+      `,
+      [input.taskId],
+    )) as Array<{ total?: number; done?: number }>;
+
+    const total = Number(rows[0]?.total ?? 0);
+    const done = Number(rows[0]?.done ?? 0);
+
+    const progress =
+      total <= 0 ? 0 : Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+    await this.tasksRepo.update(
+      { id: input.taskId, organizationId: input.contextOrganizationId },
+      { progress } as QueryDeepPartialEntity<Task>,
+    );
+  }
+
+  private async assertUserCanManageSubtasksOrThrow(input: {
+    taskId: string;
+    userId: string;
+    contextOrganizationId: string;
+  }): Promise<Task> {
+    const task = await this.tasksRepo.findOne({
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+
+    if (!task.assigneeId || String(task.assigneeId) !== String(input.userId)) {
+      throw new ForbiddenException('Only the task assignee can manage subtasks');
+    }
+
+    await this.assertUserIsProjectMemberOrThrow({
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      projectId: task.projectId,
+    });
+
+    return task;
+  }
+
+  async listSubtasks(input: {
+    taskId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    await this.assertTaskReadableOrThrow({
+      taskId: input.taskId,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
+    });
+
+    const rows = await this.subtasksRepo.find({
+      where: { taskId: input.taskId },
+      order: { position: 'ASC', createdAt: 'ASC' },
+      take: 500,
+    });
+
+    return rows.map((s) => ({
+      id: s.id,
+      taskId: s.taskId,
+      title: s.title,
+      description: s.description,
+      isCompleted: s.isCompleted,
+      completedBy: s.completedBy,
+      completedAt: s.completedAt,
+      dueDate: s.dueDate,
+      position: s.position,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+    }));
+  }
+
+  async createSubtask(input: {
+    taskId: string;
+    userId: string;
+    contextOrganizationId: string;
+    dto: { title: string; description?: string | null; dueDate?: string | null; position?: number };
+  }) {
+    if (!input.dto.title || !input.dto.title.trim()) {
+      throw new BadRequestException('title is required');
+    }
+
+    await this.assertUserCanManageSubtasksOrThrow({
+      taskId: input.taskId,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+    });
+
+    const subtask = this.subtasksRepo.create({
+      taskId: input.taskId,
+      title: input.dto.title.trim(),
+      description: input.dto.description ?? null,
+      dueDate: input.dto.dueDate ?? null,
+      position: typeof input.dto.position === 'number' ? input.dto.position : 0,
+      isCompleted: false,
+      completedBy: null,
+      completedAt: null,
+    });
+
+    const saved = await this.subtasksRepo.save(subtask);
+
+    await this.recalcTaskProgressFromSubtasks({
+      taskId: input.taskId,
+      contextOrganizationId: input.contextOrganizationId,
+    });
+
+    return {
+      id: saved.id,
+      taskId: saved.taskId,
+      title: saved.title,
+      description: saved.description,
+      isCompleted: saved.isCompleted,
+      completedBy: saved.completedBy,
+      completedAt: saved.completedAt,
+      dueDate: saved.dueDate,
+      position: saved.position,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+    };
+  }
+
+  async setSubtaskCompleted(input: {
+    taskId: string;
+    subtaskId: string;
+    isCompleted: boolean;
+    userId: string;
+    contextOrganizationId: string;
+  }) {
+    await this.assertUserCanManageSubtasksOrThrow({
+      taskId: input.taskId,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+    });
+
+    const subtask = await this.subtasksRepo.findOne({
+      where: { id: input.subtaskId, taskId: input.taskId },
+    });
+    if (!subtask) {
+      throw new NotFoundException('Subtask not found');
+    }
+
+    const patch: QueryDeepPartialEntity<Subtask> = {
+      isCompleted: input.isCompleted,
+      completedBy: input.isCompleted ? input.userId : null,
+      completedAt: input.isCompleted ? new Date() : null,
+    };
+
+    await this.subtasksRepo.update({ id: subtask.id }, patch);
+
+    await this.recalcTaskProgressFromSubtasks({
+      taskId: input.taskId,
+      contextOrganizationId: input.contextOrganizationId,
+    });
+
+    return { updated: true };
   }
 
   private async assertTaskReadableOrThrow(input: {

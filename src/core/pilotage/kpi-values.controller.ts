@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { RolesGuard } from '../rbac/roles.guard';
-import { Roles } from '../rbac/roles.decorator';
+import { Roles, SYSTEM_ROLE } from '../rbac/roles.decorator';
 import { PilotageService } from './pilotage.service';
 
 class CreateKpiValueDto {
@@ -29,17 +29,34 @@ export class KpiValuesController {
   constructor(private readonly pilotageService: PilotageService) {}
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const query = req.query ?? {};
     const kpiId = typeof query.kpiId === 'string' && query.kpiId.trim() ? query.kpiId.trim() : undefined;
 
-    return this.pilotageService.listKpiValuesForTenant(tenant?.id as string, kpiId);
+    const periodStart =
+      typeof query.periodStart === 'string' && query.periodStart.trim()
+        ? query.periodStart.trim()
+        : undefined;
+    const periodEnd =
+      typeof query.periodEnd === 'string' && query.periodEnd.trim()
+        ? query.periodEnd.trim()
+        : undefined;
+    const periodType =
+      typeof query.periodType === 'string' && query.periodType.trim()
+        ? query.periodType.trim()
+        : undefined;
+
+    return this.pilotageService.listKpiValuesForTenant(tenant?.id as string, {
+      kpiId,
+      periodStart,
+      periodEnd,
+      periodType,
+    });
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async create(@Req() req: any, @Body() dto: CreateKpiValueDto) {
     const tenant = req.tenant as { id?: string } | undefined;
 
@@ -60,7 +77,7 @@ export class KpiValuesController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async remove(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.deleteKpiValueForTenant(tenant?.id as string, id);

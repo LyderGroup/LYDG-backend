@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { RolesGuard } from '../rbac/roles.guard';
-import { Roles } from '../rbac/roles.decorator';
+import { Roles, SYSTEM_ROLE } from '../rbac/roles.decorator';
 import { PilotageService } from './pilotage.service';
 
 class CreateStrategicObjectiveDto {
@@ -49,19 +49,18 @@ class UpdateStrategicObjectiveDto {
 }
 
 @UseGuards(RolesGuard)
-@Controller('core/pilotage/objectives')
+@Controller('core/pilotage/strategic-objectives')
 export class StrategicObjectivesController {
   constructor(private readonly pilotageService: PilotageService) {}
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.listObjectivesForTenant(tenant?.id as string);
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async create(@Req() req: any, @Body() dto: CreateStrategicObjectiveDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -78,7 +77,7 @@ export class StrategicObjectivesController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateStrategicObjectiveDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -92,7 +91,7 @@ export class StrategicObjectivesController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async remove(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.deleteObjectiveForTenant(tenant?.id as string, id);

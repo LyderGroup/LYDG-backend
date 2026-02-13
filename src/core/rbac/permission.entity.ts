@@ -12,6 +12,9 @@ export class Permission {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  code!: string | null;
+
   @Column({ type: 'varchar', length: 50, name: 'system_module_code', nullable: true })
   systemModuleCode!: string | null;
 

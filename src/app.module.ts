@@ -12,6 +12,7 @@ import { Organization } from './core/organizations/organizations.entity';
 import { AuthModule } from "./core/auth/auth.module";
 import { ModulesModule } from './core/modules/modules.module';
 import { PilotageModule } from './core/pilotage/pilotage.module';
+import { ProjectsModule } from './core/projects/projects.module';
 
 @Module({
   imports: [
@@ -104,6 +105,7 @@ import { PilotageModule } from './core/pilotage/pilotage.module';
     DepartmentsModule,
     ModulesModule,
     PilotageModule,
+    ProjectsModule,
     RbacModule,
     AuthModule,
   ],
@@ -112,7 +114,7 @@ import { PilotageModule } from './core/pilotage/pilotage.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer
+    consumer  
       .apply(TenantMiddleware)
       .forRoutes({ path: 'core/*', method: RequestMethod.ALL });
   }

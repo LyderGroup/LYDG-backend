@@ -12,6 +12,7 @@ import { Repository } from 'typeorm';
 import { Permission } from './permission.entity';
 
 class CreatePermissionDto {
+  code?: string | null;
   systemModuleCode?: string | null;
   resource!: string;
   action!: string;
@@ -48,6 +49,7 @@ export class PermissionsController {
   @Post()
   async create(@Body() dto: CreatePermissionDto) {
     const permission = this.permissionsRepo.create({
+      code: dto.code ?? null,
       systemModuleCode: dto.systemModuleCode ?? null,
       resource: dto.resource,
       action: dto.action,

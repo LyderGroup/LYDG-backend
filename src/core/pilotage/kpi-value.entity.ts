@@ -43,6 +43,45 @@ export class KpiValue {
   @Column({ type: 'decimal', precision: 15, scale: 2, name: 'target_value', nullable: true })
   targetValue!: string | null;
 
+  @Column({
+    type: 'decimal',
+    precision: 15,
+    scale: 2,
+    nullable: true,
+    insert: false,
+    update: false,
+  })
+  variance!: string | null;
+
+  @Column({
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    name: 'variance_percentage',
+    nullable: true,
+    insert: false,
+    update: false,
+  })
+  variancePercentage!: string | null;
+
+  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'warning_threshold', nullable: true })
+  warningThreshold!: string | null;
+
+  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'critical_threshold', nullable: true })
+  criticalThreshold!: string | null;
+
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  direction!: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    insert: false,
+    update: false,
+  })
+  status!: string | null;
+
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
 

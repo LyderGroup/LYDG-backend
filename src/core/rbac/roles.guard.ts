@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ROLES_KEY } from './roles.decorator';
+import { ROLES_KEY, SYSTEM_ROLE } from './roles.decorator';
 import { RbacService } from './rbac.service';
 
 @Injectable()
@@ -42,10 +42,23 @@ export class RolesGuard implements CanActivate {
     const tenant = request.tenant as {id?: string | undefined};
     const organizationId = tenant?.id;
 
-    return this.rbacService.userHasAnyRole(
-      userId,
-      requiredRoles,
-      organizationId,
-    );
+    const wantsSystemRole = requiredRoles.includes(SYSTEM_ROLE);
+    const roleCodes = requiredRoles.filter((r) => r !== SYSTEM_ROLE);
+
+    if (wantsSystemRole) {
+      const hasSystemRole = await this.rbacService.userHasAnySystemRole(
+        userId,
+        organizationId,
+      );
+      if (hasSystemRole) {
+        return true;
+      }
+    }
+
+    if (!roleCodes.length) {
+      return false;
+    }
+
+    return this.rbacService.userHasAnyRole(userId, roleCodes, organizationId);
   }
 }

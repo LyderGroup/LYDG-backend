@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { RolesGuard } from '../rbac/roles.guard';
-import { Roles } from '../rbac/roles.decorator';
+import { Roles, SYSTEM_ROLE } from '../rbac/roles.decorator';
 import { PilotageService } from './pilotage.service';
 
 class CreateKpiDto {
@@ -52,14 +52,13 @@ export class KpisController {
   constructor(private readonly pilotageService: PilotageService) {}
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.listKpisForTenant(tenant?.id as string);
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async create(@Req() req: any, @Body() dto: CreateKpiDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -79,7 +78,7 @@ export class KpisController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateKpiDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -93,7 +92,7 @@ export class KpisController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @Roles(SYSTEM_ROLE)
   async remove(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.deleteKpiForTenant(tenant?.id as string, id);

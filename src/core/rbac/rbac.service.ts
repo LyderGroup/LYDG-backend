@@ -13,6 +13,30 @@ export class RbacService {
     private readonly rolesRepo: Repository<Role>,
   ) {}
 
+  async userHasAnySystemRole(
+    userId: string,
+    organizationId?: string,
+  ): Promise<boolean> {
+    const qb = this.userRolesRepo
+      .createQueryBuilder('ur')
+      .innerJoin(Role, 'r', 'r.id = ur.role_id')
+      .where('ur.user_id = :userId', { userId })
+      .andWhere('ur.is_active = true')
+      .andWhere('(ur.expires_at IS NULL OR ur.expires_at > NOW())')
+      .andWhere('r.is_active = true')
+      .andWhere('r.is_system_role = true')
+      .limit(1);
+
+    if (organizationId) {
+      qb.andWhere('(r.organization_id = :orgId OR r.is_system_role = true)', {
+        orgId: organizationId,
+      });
+    }
+
+    const match = await qb.getOne();
+    return !!match;
+  }
+
   async userHasAnyRole(
     userId: string,
     roleCodes: string[],

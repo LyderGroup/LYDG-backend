@@ -15,10 +15,10 @@ import { Task } from './task.entity';
 
 export type ControlTowerBucket = 'overdue' | 'pending_validation' | 'in_progress' | 'completed';
 
-type TaskReadScope = 'own' | 'team' | 'department' | 'tenant' | 'global';
-type TaskWriteScope = 'own' | 'team' | 'department' | 'tenant' | 'global';
-type TaskDeleteScope = 'own' | 'tenant' | 'global';
-type TaskValidateScope = 'team' | 'department' | 'tenant' | 'global';
+type TaskReadScope = 'own' | 'project' | 'team' | 'department' | 'tenant' | 'global';
+type TaskWriteScope = 'own' | 'project' | 'team' | 'department' | 'tenant' | 'global';
+type TaskDeleteScope = 'own' | 'project' | 'tenant' | 'global';
+type TaskValidateScope = 'project' | 'team' | 'department' | 'tenant' | 'global';
 
 @Injectable()
 export class ProjectsService {
@@ -414,6 +414,15 @@ export class ProjectsService {
       throw new BadRequestException('Invalid projectId');
     }
 
+    const canCreateInProject = (input.permissionCodes ?? []).includes('projects.task.create.project');
+    if (canCreateInProject) {
+      await this.assertUserIsProjectManagerOrThrow({
+        userId: input.userId,
+        contextOrganizationId: input.contextOrganizationId,
+        projectId: project.id,
+      });
+    }
+
     if (input.dto.assigneeId) {
       const membership = await this.projectMembersRepo.findOne({
         where: { projectId: project.id, userId: input.dto.assigneeId },
@@ -488,6 +497,12 @@ export class ProjectsService {
       if (!owns) {
         throw new ForbiddenException('Task not writable');
       }
+    } else if (writeScope === 'project') {
+      await this.assertUserIsProjectManagerOrThrow({
+        userId: input.userId,
+        contextOrganizationId: input.contextOrganizationId,
+        projectId: task.projectId,
+      });
     }
 
     // For team/department/tenant/global: we rely on read-scope filtering logic for accessibility
@@ -544,6 +559,12 @@ export class ProjectsService {
       if (!owns) {
         throw new ForbiddenException('Task not deletable');
       }
+    } else if (deleteScope === 'project') {
+      await this.assertUserIsProjectManagerOrThrow({
+        userId: input.userId,
+        contextOrganizationId: input.contextOrganizationId,
+        projectId: task.projectId,
+      });
     }
 
     await this.tasksRepo.delete({ id: input.id, organizationId: input.contextOrganizationId });
@@ -557,7 +578,20 @@ export class ProjectsService {
   }) {
     const scope = this.resolveTaskValidateScope(input.permissionCodes);
 
-    if (scope === 'team' || scope === 'department') {
+    if (scope === 'project') {
+      const task = await this.tasksRepo.findOne({
+        where: { id: input.id, organizationId: input.contextOrganizationId },
+      });
+      if (!task) {
+        throw new NotFoundException('Task not found');
+      }
+
+      await this.assertUserIsProjectManagerOrThrow({
+        userId: input.userId,
+        contextOrganizationId: input.contextOrganizationId,
+        projectId: task.projectId,
+      });
+    } else if (scope === 'team' || scope === 'department') {
       await this.assertTaskReadableOrThrow({
         taskId: input.id,
         userId: input.userId,
@@ -652,6 +686,7 @@ export class ProjectsService {
     if (set.has('projects.task.read.tenant')) return 'tenant';
     if (set.has('projects.task.read.department')) return 'department';
     if (set.has('projects.task.read.team')) return 'team';
+    if (set.has('projects.task.read.project')) return 'project';
     if (set.has('projects.task.read.own')) return 'own';
 
     return 'own';
@@ -664,6 +699,7 @@ export class ProjectsService {
     if (set.has('projects.task.write.tenant')) return 'tenant';
     if (set.has('projects.task.write.department')) return 'department';
     if (set.has('projects.task.write.team')) return 'team';
+    if (set.has('projects.task.write.project')) return 'project';
     if (set.has('projects.task.write.own')) return 'own';
 
     return 'own';
@@ -673,6 +709,7 @@ export class ProjectsService {
     const set = new Set((permissionCodes ?? []).filter(Boolean));
     if (set.has('projects.task.delete.global')) return 'global';
     if (set.has('projects.task.delete.tenant')) return 'tenant';
+    if (set.has('projects.task.delete.project')) return 'project';
     if (set.has('projects.task.delete.own')) return 'own';
     return 'own';
   }
@@ -683,7 +720,55 @@ export class ProjectsService {
     if (set.has('projects.task.validate.tenant')) return 'tenant';
     if (set.has('projects.task.validate.department')) return 'department';
     if (set.has('projects.task.validate.team')) return 'team';
+    if (set.has('projects.task.validate.project')) return 'project';
     return 'team';
+  }
+
+  private async assertUserIsProjectMemberOrThrow(input: {
+    userId: string;
+    contextOrganizationId: string;
+    projectId: string;
+  }): Promise<void> {
+    const rows = (await this.tasksRepo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.project_members pm
+      INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
+      WHERE pm.user_id = $1
+        AND pm.project_id = $2
+        AND p.organization_id = $3
+      LIMIT 1
+      `,
+      [input.userId, input.projectId, input.contextOrganizationId],
+    )) as Array<{ ok?: number }>;
+
+    if (!rows[0]?.ok) {
+      throw new ForbiddenException('User is not a member of this project');
+    }
+  }
+
+  private async assertUserIsProjectManagerOrThrow(input: {
+    userId: string;
+    contextOrganizationId: string;
+    projectId: string;
+  }): Promise<void> {
+    const rows = (await this.tasksRepo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.project_members pm
+      INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
+      WHERE pm.user_id = $1
+        AND pm.project_id = $2
+        AND p.organization_id = $3
+        AND pm.role_in_project = 'MANAGER'
+      LIMIT 1
+      `,
+      [input.userId, input.projectId, input.contextOrganizationId],
+    )) as Array<{ ok?: number }>;
+
+    if (!rows[0]?.ok) {
+      throw new ForbiddenException('User is not a manager of this project');
+    }
   }
 
   private async resolveRhContextForUser(input: {
@@ -780,6 +865,15 @@ export class ProjectsService {
       qb.andWhere('(t.assignee_id = :userId OR t.created_by = :userId)', {
         userId: input.userId,
       });
+    } else if (readScope === 'project') {
+      qb.andWhere(
+        `t.project_id IN (
+          SELECT pm.project_id
+          FROM module_b_projects.project_members pm
+          WHERE pm.user_id = :userId
+        )`,
+        { userId: input.userId },
+      );
     } else if (readScope === 'department' || readScope === 'team') {
       const rh = await this.resolveRhContextForUser({
         userId: input.userId,

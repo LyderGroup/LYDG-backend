@@ -51,6 +51,7 @@ export class TasksController {
   @RequirePermission(
     [
       'projects.task.read.own',
+      'projects.task.read.project',
       'projects.task.read.team',
       'projects.task.read.department',
       'projects.task.read.tenant',
@@ -109,7 +110,9 @@ export class TasksController {
 
   @Post()
   @UseGuards(PermissionGuard)
-  @RequirePermission('projects.task.create.tenant', { moduleCode: 'module_b_projects' })
+  @RequirePermission(['projects.task.create.project', 'projects.task.create.tenant'], {
+    moduleCode: 'module_b_projects',
+  })
   async createTask(@Req() req: any, @Body() dto: CreateTaskDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -135,6 +138,7 @@ export class TasksController {
   @RequirePermission(
     [
       'projects.task.write.own',
+      'projects.task.write.project',
       'projects.task.write.team',
       'projects.task.write.department',
       'projects.task.write.tenant',
@@ -166,7 +170,12 @@ export class TasksController {
   @Delete(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    ['projects.task.delete.own', 'projects.task.delete.tenant', 'projects.task.delete.global'],
+    [
+      'projects.task.delete.own',
+      'projects.task.delete.project',
+      'projects.task.delete.tenant',
+      'projects.task.delete.global',
+    ],
     { moduleCode: 'module_b_projects' },
   )
   async deleteTask(@Req() req: any, @Param('id') id: string) {
@@ -194,7 +203,13 @@ export class TasksController {
   @Post(':id/validate')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    ['projects.task.validate.team', 'projects.task.validate.department', 'projects.task.validate.tenant'],
+    [
+      'projects.task.validate.project',
+      'projects.task.validate.team',
+      'projects.task.validate.department',
+      'projects.task.validate.tenant',
+      'projects.task.validate.global',
+    ],
     { moduleCode: 'module_b_projects' },
   )
   async validateTask(@Req() req: any, @Param('id') id: string) {

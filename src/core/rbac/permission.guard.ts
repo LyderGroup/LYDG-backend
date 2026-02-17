@@ -124,6 +124,7 @@ export class PermissionGuard implements CanActivate {
       userId,
       organizationId,
       permissions,
+      request,
     });
 
     request.permissionCodes = Array.from(permissions);
@@ -141,24 +142,89 @@ export class PermissionGuard implements CanActivate {
     userId: string;
     organizationId: string;
     permissions: Set<string>;
+    request: any;
   }): Promise<void> {
     if (input.moduleCode !== 'module_b_projects') {
       return;
     }
-
+ 
     if (input.permissions.has('projects.task.read.project')) {
       return;
     }
 
     try {
-      const rows = (await this.userRolesRepo.manager.query(
+      const params = (input.request?.params ?? {}) as Record<string, any>;
+
+      const taskId =
+        typeof params.id === 'string' && params.id.trim()
+          ? params.id.trim()
+          : typeof params.taskId === 'string' && params.taskId.trim()
+            ? params.taskId.trim()
+            : undefined;
+
+      const subtaskId =
+        typeof params.subtaskId === 'string' && params.subtaskId.trim() ? params.subtaskId.trim() : undefined;
+
+      // If a specific task/subtask is targeted, resolve its project and verify membership in that project.
+      if (taskId || subtaskId) {
+        const rows = (await this.userRolesRepo.manager.query(
+          taskId
+            ? `
+              SELECT
+                t.project_id AS project_id,
+                CASE
+                  WHEN COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
+                  ELSE 0
+                END AS is_manager,
+                CASE WHEN pm.id IS NULL AND p.manager_id <> $1 THEN 0 ELSE 1 END AS is_member
+              FROM module_b_projects.tasks t
+              INNER JOIN module_b_projects.projects p ON p.id = t.project_id
+              LEFT JOIN module_b_projects.project_members pm
+                ON pm.project_id = t.project_id
+               AND pm.user_id = $1
+              WHERE t.id = $2
+                AND p.organization_id = $3
+              LIMIT 1
+              `
+            : `
+              SELECT
+                t.project_id AS project_id,
+                CASE
+                  WHEN COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
+                  ELSE 0
+                END AS is_manager,
+                CASE WHEN pm.id IS NULL AND p.manager_id <> $1 THEN 0 ELSE 1 END AS is_member
+              FROM module_b_projects.subtasks s
+              INNER JOIN module_b_projects.tasks t ON t.id = s.task_id
+              INNER JOIN module_b_projects.projects p ON p.id = t.project_id
+              LEFT JOIN module_b_projects.project_members pm
+                ON pm.project_id = t.project_id
+               AND pm.user_id = $1
+              WHERE s.id = $2
+                AND p.organization_id = $3
+              LIMIT 1
+              `,
+          [input.userId, taskId ?? subtaskId, input.organizationId],
+        )) as Array<{ project_id?: string; is_manager?: number; is_member?: number }>;
+
+        if (!rows[0]?.project_id || !rows[0]?.is_member) {
+          return;
+        }
+
+        input.permissions.add('projects.task.read.project');
+        if (rows[0]?.is_manager) {
+          input.permissions.add('projects.task.write.project');
+          input.permissions.add('projects.task.delete.project');
+          input.permissions.add('projects.task.validate.project');
+        }
+
+        return;
+      }
+
+      // No specific project context (e.g. control-tower): allow project-scoped read if member of ANY project.
+      const fallback = (await this.userRolesRepo.manager.query(
         `
-        SELECT
-          1 AS ok,
-          CASE
-            WHEN COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
-            ELSE 0
-          END AS is_manager
+        SELECT 1 AS ok
         FROM module_b_projects.project_members pm
         INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
         WHERE pm.user_id = $1
@@ -166,18 +232,10 @@ export class PermissionGuard implements CanActivate {
         LIMIT 1
         `,
         [input.userId, input.organizationId],
-      )) as Array<{ ok?: number; is_manager?: number }>;
+      )) as Array<{ ok?: number }>;
 
-      if (!rows[0]?.ok) {
-        return;
-      }
-
-      input.permissions.add('projects.task.read.project');
-
-      if (rows[0]?.is_manager) {
-        input.permissions.add('projects.task.write.project');
-        input.permissions.add('projects.task.delete.project');
-        input.permissions.add('projects.task.validate.project');
+      if (fallback[0]?.ok) {
+        input.permissions.add('projects.task.read.project');
       }
     } catch {
       return;

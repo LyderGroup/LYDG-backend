@@ -211,7 +211,17 @@ export class ProjectsLookupsController {
       [plannedEndDate, projectId.trim(), tenant.id],
     );
 
-    if (!Array.isArray(result) || !result[0]?.id) {
+    const rows = Array.isArray(result)
+      ? result
+      : Array.isArray((result as any)?.rows)
+        ? (result as any).rows
+        : [];
+
+    const hasUpdated =
+      !!rows?.[0]?.id ||
+      (typeof (result as any)?.rowCount === 'number' ? (result as any).rowCount > 0 : false);
+
+    if (!hasUpdated) {
       const existsElsewhere = (await this.dataSource.query(
         `
         SELECT p.id, p.organization_id AS "organizationId"

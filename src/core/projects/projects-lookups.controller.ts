@@ -212,6 +212,24 @@ export class ProjectsLookupsController {
     );
 
     if (!Array.isArray(result) || !result[0]?.id) {
+      const existsElsewhere = (await this.dataSource.query(
+        `
+        SELECT p.id, p.organization_id AS "organizationId"
+        FROM module_b_projects.projects p
+        WHERE p.id = $1
+        LIMIT 1
+        `,
+        [projectId.trim()],
+      )) as Array<{ id?: string; organizationId?: string }>;
+
+      if (existsElsewhere[0]?.id) {
+        throw new BadRequestException(
+          `Project not found in this organization (tenant mismatch). projectId=${projectId.trim()} tenantOrgId=${String(
+            tenant.id,
+          )} projectOrgId=${String(existsElsewhere[0]?.organizationId ?? '')}`,
+        );
+      }
+
       throw new BadRequestException('Project not found');
     }
 

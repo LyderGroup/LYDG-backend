@@ -2,8 +2,6 @@ import {
   BadRequestException,
   Body,
   Controller,
-  Get,
-  Param,
   Post,
   Req,
   UnauthorizedException,
@@ -48,76 +46,6 @@ export class ProjectsController {
       userId: String(currentUser.id),
       permissionCodes,
       dto,
-    });
-  }
-
-  @Get(':id')
-  @UseGuards(PermissionGuard)
-  @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
-    { moduleCode: 'module_b_projects' },
-  )
-  async getProjectById(@Req() req: any, @Param('id') id: string) {
-    const tenant = req.tenant as { id?: string } | undefined;
-    const currentUser = req.user as { id?: string } | undefined;
-
-    if (!tenant?.id) {
-      throw new BadRequestException('Missing tenant context (x-organization-code)');
-    }
-    if (!currentUser?.id) {
-      throw new UnauthorizedException('Missing authenticated user');
-    }
-    if (!id || !id.trim()) {
-      throw new BadRequestException('id is required');
-    }
-
-    return this.projectsService.getProjectById({
-      id: String(id),
-      userId: String(currentUser.id),
-      contextOrganizationId: String(tenant.id),
-    });
-  }
-
-  @Get(':id/my-tasks')
-  @UseGuards(PermissionGuard)
-  @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
-    { moduleCode: 'module_b_projects' },
-  )
-  async listMyTasksForProject(@Req() req: any, @Param('id') projectId: string) {
-    const tenant = req.tenant as { id?: string } | undefined;
-    const currentUser = req.user as { id?: string } | undefined;
-    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
-
-    if (!tenant?.id) {
-      throw new BadRequestException('Missing tenant context (x-organization-code)');
-    }
-    if (!currentUser?.id) {
-      throw new UnauthorizedException('Missing authenticated user');
-    }
-    if (!projectId || !projectId.trim()) {
-      throw new BadRequestException('projectId is required');
-    }
-
-    return this.projectsService.listMyTasksForProject({
-      projectId: String(projectId),
-      userId: String(currentUser.id),
-      contextOrganizationId: String(tenant.id),
-      permissionCodes,
     });
   }
 }

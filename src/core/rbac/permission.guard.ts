@@ -94,7 +94,15 @@ export class PermissionGuard implements CanActivate {
       organizationId,
     );
     if (hasSystemRole) {
-      request.permissionCodes = ['projects.task.read.global'];
+      request.permissionCodes = [
+        'projects.task.read.global',
+        'projects.task.write.global',
+        'projects.task.delete.global',
+        'projects.task.validate.global',
+        'projects.task.create.tenant',
+        'projects.task.export.tenant',
+        'projects.project.create.tenant',
+      ];
       return true;
     }
 
@@ -111,6 +119,13 @@ export class PermissionGuard implements CanActivate {
 
     const permissions = await this.getCachedPermissionsForUser(userId, organizationId);
 
+    await this.maybeAugmentPermissionsFromProjectMembership({
+      moduleCode,
+      userId,
+      organizationId,
+      permissions,
+    });
+
     request.permissionCodes = Array.from(permissions);
 
     const ok = requiredPermissions.some((p) => permissions.has(p));
@@ -119,6 +134,54 @@ export class PermissionGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  private async maybeAugmentPermissionsFromProjectMembership(input: {
+    moduleCode: string | null;
+    userId: string;
+    organizationId: string;
+    permissions: Set<string>;
+  }): Promise<void> {
+    if (input.moduleCode !== 'module_b_projects') {
+      return;
+    }
+
+    if (input.permissions.has('projects.task.read.project')) {
+      return;
+    }
+
+    try {
+      const rows = (await this.userRolesRepo.manager.query(
+        `
+        SELECT
+          1 AS ok,
+          CASE
+            WHEN COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
+            ELSE 0
+          END AS is_manager
+        FROM module_b_projects.project_members pm
+        INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
+        WHERE pm.user_id = $1
+          AND p.organization_id = $2
+        LIMIT 1
+        `,
+        [input.userId, input.organizationId],
+      )) as Array<{ ok?: number; is_manager?: number }>;
+
+      if (!rows[0]?.ok) {
+        return;
+      }
+
+      input.permissions.add('projects.task.read.project');
+
+      if (rows[0]?.is_manager) {
+        input.permissions.add('projects.task.write.project');
+        input.permissions.add('projects.task.delete.project');
+        input.permissions.add('projects.task.validate.project');
+      }
+    } catch {
+      return;
+    }
   }
 
   private inferModuleCodeFromPermission(permissionCode: string): string | null {

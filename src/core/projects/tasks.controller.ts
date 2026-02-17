@@ -48,13 +48,16 @@ class CreateSubtaskDto {
   position?: number;
 }
 
-class SetSubtaskCompletedDto {
-  isCompleted!: boolean;
+class UpdateSubtaskDto {
+  title?: string;
+  description?: string | null;
+  dueDate?: string | null;
+  position?: number;
+  isCompleted?: boolean;
 }
 
 class CreateTaskCommentDto {
   content!: string;
-  parentCommentId?: string | null;
 }
 
 @UseGuards(RolesGuard)
@@ -114,14 +117,73 @@ export class TasksController {
 
     const takeRaw = typeof query.take === 'string' ? Number(query.take) : undefined;
 
-    return this.projectsService.listControlTowerTasks({
-      userId: String(currentUser.id),
-      contextOrganizationId: String(tenant.id),
-      organizationIds,
-      bucket,
-      take: Number.isFinite(takeRaw as number) ? (takeRaw as number) : undefined,
-      permissionCodes,
-    });
+    const take = Number.isFinite(takeRaw as number) ? (takeRaw as number) : undefined;
+
+    // Backward compatible: if bucket is specified, return a single list.
+    if (bucket) {
+      return this.projectsService.listControlTowerTasks({
+        userId: String(currentUser.id),
+        contextOrganizationId: String(tenant.id),
+        organizationIds,
+        bucket,
+        take,
+        permissionCodes,
+      });
+    }
+
+    const takeOverdueRaw = typeof query.takeOverdue === 'string' ? Number(query.takeOverdue) : undefined;
+    const takePendingRaw =
+      typeof query.takePendingValidation === 'string' ? Number(query.takePendingValidation) : undefined;
+    const takeInProgressRaw = typeof query.takeInProgress === 'string' ? Number(query.takeInProgress) : undefined;
+    const takeCompletedRaw = typeof query.takeCompleted === 'string' ? Number(query.takeCompleted) : undefined;
+
+    const takeOverdue = take ?? (Number.isFinite(takeOverdueRaw as number) ? (takeOverdueRaw as number) : 40);
+    const takePendingValidation =
+      take ?? (Number.isFinite(takePendingRaw as number) ? (takePendingRaw as number) : 40);
+    const takeInProgress = take ?? (Number.isFinite(takeInProgressRaw as number) ? (takeInProgressRaw as number) : 100);
+    const takeCompleted = take ?? (Number.isFinite(takeCompletedRaw as number) ? (takeCompletedRaw as number) : 50);
+
+    const [overdue, pending_validation, in_progress, completed] = await Promise.all([
+      this.projectsService.listControlTowerTasks({
+        userId: String(currentUser.id),
+        contextOrganizationId: String(tenant.id),
+        organizationIds,
+        bucket: 'overdue',
+        take: takeOverdue,
+        permissionCodes,
+      }),
+      this.projectsService.listControlTowerTasks({
+        userId: String(currentUser.id),
+        contextOrganizationId: String(tenant.id),
+        organizationIds,
+        bucket: 'pending_validation',
+        take: takePendingValidation,
+        permissionCodes,
+      }),
+      this.projectsService.listControlTowerTasks({
+        userId: String(currentUser.id),
+        contextOrganizationId: String(tenant.id),
+        organizationIds,
+        bucket: 'in_progress',
+        take: takeInProgress,
+        permissionCodes,
+      }),
+      this.projectsService.listControlTowerTasks({
+        userId: String(currentUser.id),
+        contextOrganizationId: String(tenant.id),
+        organizationIds,
+        bucket: 'completed',
+        take: takeCompleted,
+        permissionCodes,
+      }),
+    ]);
+
+    return {
+      overdue,
+      pending_validation,
+      in_progress,
+      completed,
+    };
   }
 
   @Post()
@@ -354,7 +416,7 @@ export class TasksController {
     }
 
     return this.projectsService.listTaskComments({
-      taskId: String(id),
+      taskId: id,
       userId: String(currentUser.id),
       contextOrganizationId: String(tenant.id),
       permissionCodes,
@@ -365,12 +427,12 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
+      'projects.task.read.own',
+      'projects.task.read.project',
+      'projects.task.read.team',
+      'projects.task.read.department',
+      'projects.task.read.tenant',
+      'projects.task.read.global',
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -387,7 +449,7 @@ export class TasksController {
     }
 
     return this.projectsService.createTaskComment({
-      taskId: String(id),
+      taskId: id,
       userId: String(currentUser.id),
       contextOrganizationId: String(tenant.id),
       permissionCodes,
@@ -395,7 +457,7 @@ export class TasksController {
     });
   }
 
-  @Get(':taskId/subtasks')
+  @Get(':id/subtasks')
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
@@ -408,7 +470,7 @@ export class TasksController {
     ],
     { moduleCode: 'module_b_projects' },
   )
-  async listSubtasks(@Req() req: any, @Param('taskId') taskId: string) {
+  async listSubtasks(@Req() req: any, @Param('id') taskId: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
     const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
@@ -419,19 +481,16 @@ export class TasksController {
     if (!currentUser?.id) {
       throw new UnauthorizedException('Missing authenticated user');
     }
-    if (!taskId || !taskId.trim()) {
-      throw new BadRequestException('taskId is required');
-    }
 
     return this.projectsService.listSubtasks({
-      taskId: String(taskId),
+      taskId,
       userId: String(currentUser.id),
       contextOrganizationId: String(tenant.id),
       permissionCodes,
     });
   }
 
-  @Post(':taskId/subtasks')
+  @Post(':id/subtasks')
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
@@ -444,9 +503,10 @@ export class TasksController {
     ],
     { moduleCode: 'module_b_projects' },
   )
-  async createSubtask(@Req() req: any, @Param('taskId') taskId: string, @Body() dto: CreateSubtaskDto) {
+  async createSubtask(@Req() req: any, @Param('id') taskId: string, @Body() dto: CreateSubtaskDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
 
     if (!tenant?.id) {
       throw new BadRequestException('Missing tenant context (x-organization-code)');
@@ -454,19 +514,17 @@ export class TasksController {
     if (!currentUser?.id) {
       throw new UnauthorizedException('Missing authenticated user');
     }
-    if (!taskId || !taskId.trim()) {
-      throw new BadRequestException('taskId is required');
-    }
 
     return this.projectsService.createSubtask({
-      taskId: String(taskId),
+      taskId,
       userId: String(currentUser.id),
       contextOrganizationId: String(tenant.id),
+      permissionCodes,
       dto,
     });
   }
 
-  @Patch(':taskId/subtasks/:subtaskId')
+  @Patch('subtasks/:subtaskId')
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
@@ -479,14 +537,14 @@ export class TasksController {
     ],
     { moduleCode: 'module_b_projects' },
   )
-  async setSubtaskCompleted(
+  async updateSubtask(
     @Req() req: any,
-    @Param('taskId') taskId: string,
     @Param('subtaskId') subtaskId: string,
-    @Body() dto: SetSubtaskCompletedDto,
+    @Body() dto: UpdateSubtaskDto,
   ) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
 
     if (!tenant?.id) {
       throw new BadRequestException('Missing tenant context (x-organization-code)');
@@ -494,19 +552,44 @@ export class TasksController {
     if (!currentUser?.id) {
       throw new UnauthorizedException('Missing authenticated user');
     }
-    if (!taskId || !taskId.trim()) {
-      throw new BadRequestException('taskId is required');
-    }
-    if (!subtaskId || !subtaskId.trim()) {
-      throw new BadRequestException('subtaskId is required');
-    }
 
-    return this.projectsService.setSubtaskCompleted({
-      taskId: String(taskId),
-      subtaskId: String(subtaskId),
-      isCompleted: !!dto?.isCompleted,
+    return this.projectsService.updateSubtask({
+      subtaskId,
       userId: String(currentUser.id),
       contextOrganizationId: String(tenant.id),
+      permissionCodes,
+      dto,
+    });
+  }
+
+  @Delete('subtasks/:subtaskId')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.delete.own',
+      'projects.task.delete.project',
+      'projects.task.delete.tenant',
+      'projects.task.delete.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async deleteSubtask(@Req() req: any, @Param('subtaskId') subtaskId: string) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+
+    return this.projectsService.deleteSubtask({
+      subtaskId,
+      userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
+      permissionCodes,
     });
   }
 }

@@ -15,7 +15,10 @@ import { ProjectsService } from './projects.service';
 import { TasksController } from './tasks.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Project, Task, Subtask, TaskComment, ProjectMember, UserRole, Organization, User]), RbacModule],
+  imports: [
+    TypeOrmModule.forFeature([Project, Task, Subtask, TaskComment, ProjectMember, UserRole, Organization, User]),
+    RbacModule,
+  ],
   controllers: [TasksController, ProjectsController, ProjectsLookupsController],
   providers: [ProjectsService],
   exports: [ProjectsService],

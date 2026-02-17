@@ -25,10 +25,6 @@ export class TaskComment {
   @Column({ type: 'uuid', name: 'parent_comment_id', nullable: true })
   parentCommentId!: string | null;
 
-  @ManyToOne(() => TaskComment, { nullable: true })
-  @JoinColumn({ name: 'parent_comment_id' })
-  parentComment?: TaskComment | null;
-
   @Column({ type: 'uuid', name: 'user_id', nullable: true })
   userId!: string | null;
 
@@ -36,7 +32,7 @@ export class TaskComment {
   @JoinColumn({ name: 'user_id' })
   user?: User | null;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'text', name: 'content' })
   content!: string;
 
   @Column({ type: 'varchar', length: 50, name: 'content_type', default: 'text' })
@@ -45,10 +41,10 @@ export class TaskComment {
   @Column({ type: 'boolean', name: 'is_internal', default: true })
   isInternal!: boolean;
 
-  @Column({ type: 'varchar', length: 20, default: 'public' })
+  @Column({ type: 'varchar', length: 20, name: 'visibility', default: 'public' })
   visibility!: string;
 
-  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  @Column({ type: 'jsonb', name: 'mentions', default: () => "'[]'" })
   mentions!: any;
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })

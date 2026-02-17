@@ -1,8 +1,10 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Param,
+  Patch,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -15,6 +17,15 @@ import { RolesGuard } from '../rbac/roles.guard';
 @Controller('core/projects/lookups')
 export class ProjectsLookupsController {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+
+  private assertValidDateOrNull(input: any): string | null {
+    if (input === null || input === undefined || String(input).trim() === '') return null;
+    const str = String(input).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      throw new BadRequestException('Invalid date format (expected YYYY-MM-DD)');
+    }
+    return str;
+  }
 
   @Get('departments')
   async listDepartments(@Req() req: any) {
@@ -132,16 +143,79 @@ export class ProjectsLookupsController {
 
     const rows = (await this.dataSource.query(
       `
-      SELECT p.id, p.name, p.code
+      SELECT
+        p.id,
+        p.name,
+        p.code,
+        p.status,
+        p.priority,
+        p.progress,
+        p.planned_end_date AS "plannedEndDate",
+        COALESCE(o.name_code, o.name) AS "organizationLabel",
+        (COALESCE(mu.first_name, '') || ' ' || COALESCE(mu.last_name, ''))::text AS "managerName",
+        p.manager_id AS "managerId"
       FROM module_b_projects.projects p
+      INNER JOIN core.organizations o ON o.id = p.organization_id
+      LEFT JOIN core.users mu ON mu.id = p.manager_id
       WHERE p.organization_id = $1
       ORDER BY p.created_at DESC
       LIMIT 500
       `,
       [tenant.id],
-    )) as Array<{ id: string; name: string; code: string }>;
+    )) as Array<{
+      id: string;
+      name: string;
+      code: string;
+      status: string;
+      priority: string | null;
+      progress: number;
+      plannedEndDate: string | null;
+      organizationLabel: string | null;
+      managerName: string | null;
+      managerId: string | null;
+    }>;
 
     return rows;
+  }
+
+  @Patch('projects/:id/deadline')
+  async updateProjectDeadline(
+    @Req() req: any,
+    @Param('id') projectId: string,
+    @Body() body: { plannedEndDate?: string | null },
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+    if (!projectId || !projectId.trim()) {
+      throw new BadRequestException('projectId is required');
+    }
+
+    const plannedEndDate = this.assertValidDateOrNull(body?.plannedEndDate);
+
+    const result = await this.dataSource.query(
+      `
+      UPDATE module_b_projects.projects p
+      SET planned_end_date = $1,
+          updated_at = NOW()
+      WHERE p.id = $2
+        AND p.organization_id = $3
+      RETURNING p.id
+      `,
+      [plannedEndDate, projectId.trim(), tenant.id],
+    );
+
+    if (!Array.isArray(result) || !result[0]?.id) {
+      throw new BadRequestException('Project not found');
+    }
+
+    return { ok: true };
   }
 
   @Get('projects/:id/members')

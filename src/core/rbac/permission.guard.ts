@@ -117,7 +117,8 @@ export class PermissionGuard implements CanActivate {
       }
     }
 
-    const permissions = await this.getCachedPermissionsForUser(userId, organizationId);
+    const basePermissions = await this.getCachedPermissionsForUser(userId, organizationId);
+    const permissions = new Set(basePermissions);
 
     await this.maybeAugmentPermissionsFromProjectMembership({
       moduleCode,
@@ -164,8 +165,7 @@ export class PermissionGuard implements CanActivate {
 
       const subtaskId =
         typeof params.subtaskId === 'string' && params.subtaskId.trim() ? params.subtaskId.trim() : undefined;
-
-      // If a specific task/subtask is targeted, resolve its project and verify membership in that project.
+ 
       if (taskId || subtaskId) {
         const rows = (await this.userRolesRepo.manager.query(
           taskId
@@ -221,7 +221,6 @@ export class PermissionGuard implements CanActivate {
         return;
       }
 
-      // No specific project context (e.g. control-tower): allow project-scoped read if member of ANY project.
       const fallback = (await this.userRolesRepo.manager.query(
         `
         SELECT 1 AS ok

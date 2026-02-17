@@ -363,6 +363,7 @@ export class TasksController {
   @RequirePermission(
     [
       'projects.task.read.own',
+      'projects.task.read.project',
       'projects.task.read.team',
       'projects.task.read.department',
       'projects.task.read.tenant',

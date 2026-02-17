@@ -14,6 +14,7 @@ import { Project } from './project.entity';
 import { Subtask } from './subtask.entity';
 import { TaskComment } from './task-comment.entity';
 import { Task } from './task.entity';
+import { TaskCommentsRealtimeService } from './task-comments.realtime';
 
 export type ControlTowerBucket = 'overdue' | 'pending_validation' | 'in_progress' | 'completed';
 
@@ -39,6 +40,7 @@ export class ProjectsService {
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
+    private readonly taskCommentsRealtime: TaskCommentsRealtimeService,
   ) {}
 
   private async recalcProjectProgressFromTasks(input: {
@@ -664,7 +666,7 @@ export class ProjectsService {
       : '';
     const authorName = rawName ? rawName : null;
 
-    return {
+    const payload = {
       id: saved.id,
       taskId: saved.taskId,
       parentCommentId: saved.parentCommentId,
@@ -678,6 +680,14 @@ export class ProjectsService {
       createdAt: saved.createdAt,
       updatedAt: saved.updatedAt,
     };
+
+    this.taskCommentsRealtime.emitCommentCreated({
+      organizationId: input.contextOrganizationId,
+      taskId: saved.taskId,
+      payload,
+    });
+
+    return payload;
   }
 
   private async assertTaskReadableOrThrow(input: {

@@ -9,6 +9,8 @@ import { Project } from './project.entity';
 import { Subtask } from './subtask.entity';
 import { TaskComment } from './task-comment.entity';
 import { Task } from './task.entity';
+import { TaskCommentsGateway } from './task-comments.gateway';
+import { TaskCommentsRealtimeService } from './task-comments.realtime';
 import { ProjectsController } from './projects.controller';
 import { ProjectsLookupsController } from './projects-lookups.controller';
 import { ProjectsService } from './projects.service';
@@ -20,7 +22,7 @@ import { TasksController } from './tasks.controller';
     RbacModule,
   ],
   controllers: [TasksController, ProjectsController, ProjectsLookupsController],
-  providers: [ProjectsService],
+  providers: [ProjectsService, TaskCommentsGateway, TaskCommentsRealtimeService],
   exports: [ProjectsService],
 })
 export class ProjectsModule {}

@@ -2,6 +2,8 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
+  Param,
   Post,
   Req,
   UnauthorizedException,
@@ -12,36 +14,29 @@ import { RequirePermission } from '../rbac/require-permission.decorator';
 import { RolesGuard } from '../rbac/roles.guard';
 import { ProjectsService } from './projects.service';
 
-class CreateProjectDto {
-  departmentId!: string;
-  name!: string;
-  code!: string;
-  description?: string | null;
-  managerId?: string | null;
-  memberIds?: string[];
-}
-
-class CreateProjectV2Dto {
-  name!: string;
-  code!: string;
-  description?: string | null;
-
-  organizationIds!: string[];
-  departments!: Array<{ organizationId: string; departmentId: string }>;
-
-  managerIds?: string[];
-  memberIds?: string[];
+class CreateProjectCommentDto {
+  content!: string;
 }
 
 @UseGuards(RolesGuard)
-@Controller('core/projects')
-export class ProjectsController {
+@Controller('core/projects/projects')
+export class ProjectCommentsController {
   constructor(private readonly projectsService: ProjectsService) {}
 
-  @Post()
+  @Get(':id/comments')
   @UseGuards(PermissionGuard)
-  @RequirePermission('projects.project.create.tenant', { moduleCode: 'module_b_projects' })
-  async createProject(@Req() req: any, @Body() dto: CreateProjectDto) {
+  @RequirePermission(
+    [
+      'projects.task.read.own',
+      'projects.task.read.project',
+      'projects.task.read.team',
+      'projects.task.read.department',
+      'projects.task.read.tenant',
+      'projects.task.read.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async listComments(@Req() req: any, @Param('id') projectId: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
     const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
@@ -53,18 +48,32 @@ export class ProjectsController {
       throw new UnauthorizedException('Missing authenticated user');
     }
 
-    return this.projectsService.createProject({
-      contextOrganizationId: String(tenant.id),
+    return this.projectsService.listProjectComments({
+      projectId,
       userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
       permissionCodes,
-      dto,
     });
   }
 
-  @Post('v2')
+  @Post(':id/comments')
   @UseGuards(PermissionGuard)
-  @RequirePermission('projects.project.create.tenant', { moduleCode: 'module_b_projects' })
-  async createProjectV2(@Req() req: any, @Body() dto: CreateProjectV2Dto) {
+  @RequirePermission(
+    [
+      'projects.task.read.own',
+      'projects.task.read.project',
+      'projects.task.read.team',
+      'projects.task.read.department',
+      'projects.task.read.tenant',
+      'projects.task.read.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async createComment(
+    @Req() req: any,
+    @Param('id') projectId: string,
+    @Body() dto: CreateProjectCommentDto,
+  ) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
     const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
@@ -76,9 +85,10 @@ export class ProjectsController {
       throw new UnauthorizedException('Missing authenticated user');
     }
 
-    return this.projectsService.createProjectV2({
-      contextOrganizationId: String(tenant.id),
+    return this.projectsService.createProjectComment({
+      projectId,
       userId: String(currentUser.id),
+      contextOrganizationId: String(tenant.id),
       permissionCodes,
       dto,
     });

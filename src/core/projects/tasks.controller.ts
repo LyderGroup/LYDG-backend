@@ -69,6 +69,7 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
+      'projects.task.control_tower.tenant',
       'projects.task.read.own',
       'projects.task.read.project',
       'projects.task.read.team',

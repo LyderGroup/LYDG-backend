@@ -10,11 +10,13 @@ import { In, Repository, type QueryDeepPartialEntity } from 'typeorm';
 import { Organization } from '../organizations/organizations.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { ProjectMember } from './project-member.entity';
+import { ProjectComment } from './project-comment.entity';
 import { Project } from './project.entity';
 import { Subtask } from './subtask.entity';
 import { TaskComment } from './task-comment.entity';
 import { Task } from './task.entity';
 import { TaskCommentsRealtimeService } from './task-comments.realtime';
+import { ProjectCommentsRealtimeService } from './project-comments.realtime';
 
 export type ControlTowerBucket = 'overdue' | 'pending_validation' | 'in_progress' | 'completed';
 
@@ -32,6 +34,8 @@ export class ProjectsService {
     private readonly subtasksRepo: Repository<Subtask>,
     @InjectRepository(TaskComment)
     private readonly taskCommentsRepo: Repository<TaskComment>,
+    @InjectRepository(ProjectComment)
+    private readonly projectCommentsRepo: Repository<ProjectComment>,
     @InjectRepository(Project)
     private readonly projectsRepo: Repository<Project>, 
     @InjectRepository(ProjectMember)
@@ -41,7 +45,160 @@ export class ProjectsService {
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
     private readonly taskCommentsRealtime: TaskCommentsRealtimeService,
+    private readonly projectCommentsRealtime: ProjectCommentsRealtimeService,
   ) {}
+
+  private async assertProjectReadableOrThrow(input: {
+    projectId: string;
+    userId: string;
+  }): Promise<{ projectId: string; organizationId: string }> {
+    const rows = (await this.projectsRepo.manager.query(
+      `
+      SELECT p.id AS project_id, p.organization_id AS organization_id
+      FROM module_b_projects.projects p
+      WHERE p.id = $1
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM module_b_projects.project_managers pm
+            WHERE pm.project_id = p.id
+              AND pm.user_id = $2
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM module_b_projects.project_members m
+            WHERE m.project_id = p.id
+              AND m.user_id = $2
+          )
+          OR p.manager_id = $2
+          OR p.created_by = $2
+        )
+      LIMIT 1
+      `,
+      [input.projectId, input.userId],
+    )) as Array<{ project_id?: string; organization_id?: string }>;
+
+    const first = rows[0];
+    if (first?.project_id) {
+      return {
+        projectId: String(first.project_id),
+        organizationId: String(first.organization_id),
+      };
+    }
+
+    const exists = (await this.projectsRepo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.projects p
+      WHERE p.id = $1
+      LIMIT 1
+      `,
+      [input.projectId],
+    )) as Array<{ ok?: number }>;
+
+    if (!exists?.[0]?.ok) {
+      throw new NotFoundException('Project not found');
+    }
+
+    throw new ForbiddenException('Project not accessible');
+  }
+
+  async listProjectComments(input: {
+    projectId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    await this.assertProjectReadableOrThrow({ projectId: input.projectId, userId: input.userId });
+
+    const rows = await this.projectCommentsRepo
+      .createQueryBuilder('c')
+      .leftJoin('c.user', 'u')
+      .where('c.project_id = :projectId', { projectId: input.projectId })
+      .orderBy('c.createdAt', 'ASC')
+      .take(500)
+      .getMany();
+
+    return rows.map((c) => {
+      const rawName = c.user ? `${c.user.firstName ?? ''} ${c.user.lastName ?? ''}`.trim() : '';
+      const authorName = rawName ? rawName : null;
+      return {
+        id: c.id,
+        projectId: c.projectId,
+        parentCommentId: c.parentCommentId,
+        userId: c.userId,
+        authorName,
+        authorEmail: c.user?.email ?? null,
+        content: c.content,
+        contentType: c.contentType,
+        isInternal: c.isInternal,
+        visibility: c.visibility,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+      };
+    });
+  }
+
+  async createProjectComment(input: {
+    projectId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+    dto: {
+      content: string;
+    };
+  }) {
+    await this.assertProjectReadableOrThrow({ projectId: input.projectId, userId: input.userId });
+
+    const content = String(input.dto.content ?? '').trim();
+    if (!content) {
+      throw new BadRequestException('content is required');
+    }
+
+    const comment = this.projectCommentsRepo.create({
+      projectId: input.projectId,
+      userId: input.userId,
+      parentCommentId: null,
+      content,
+      contentType: 'text',
+      visibility: 'public',
+      isInternal: true,
+      mentions: [],
+    });
+
+    const saved = await this.projectCommentsRepo.save(comment);
+
+    const withUser = await this.projectCommentsRepo
+      .createQueryBuilder('c')
+      .leftJoin('c.user', 'u')
+      .where('c.id = :id', { id: saved.id })
+      .getOne();
+
+    const rawName = withUser?.user ? `${withUser.user.firstName ?? ''} ${withUser.user.lastName ?? ''}`.trim() : '';
+    const authorName = rawName ? rawName : null;
+
+    const payload = {
+      id: saved.id,
+      projectId: saved.projectId,
+      parentCommentId: saved.parentCommentId,
+      userId: saved.userId,
+      authorName,
+      authorEmail: withUser?.user?.email ?? null,
+      content: saved.content,
+      contentType: saved.contentType,
+      isInternal: saved.isInternal,
+      visibility: saved.visibility,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+    };
+
+    this.projectCommentsRealtime.emitCommentCreated({
+      projectId: saved.projectId,
+      payload,
+    });
+
+    return payload;
+  }
 
   private async recalcProjectProgressFromTasks(input: {
     projectId: string;
@@ -226,6 +383,306 @@ export class ProjectsService {
     };
   }
 
+  private normalizeUuidList(input: unknown): string[] {
+    const arr = Array.isArray(input) ? input : [];
+    return arr
+      .map((x) => String(x ?? '').trim())
+      .filter((x) => x.length > 0);
+  }
+
+  private uniqueStrings(list: string[]): string[] {
+    return Array.from(new Set(list.map((x) => String(x))));
+  }
+
+  private async userHasAnySystemRole(userId: string, _organizationId: string): Promise<boolean> {
+    const rows = (await this.userRolesRepo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM core.user_roles ur
+      INNER JOIN core.roles r ON r.id = ur.role_id
+      WHERE ur.user_id = $1
+        AND ur.is_active = true
+        AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+        AND r.is_active = true
+        AND r.is_system_role = true
+      LIMIT 1
+      `,
+      [userId],
+    )) as Array<{ ok?: number }>;
+
+    return !!rows?.[0]?.ok;
+  }
+
+  private async userHasAnyRoleInOrgs(input: {
+    userId: string;
+    organizationIds: string[];
+    roleCodes: string[];
+  }): Promise<boolean> {
+    if (!input.organizationIds.length || !input.roleCodes.length) return false;
+
+    const rows = (await this.userRolesRepo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM core.user_roles ur
+      INNER JOIN core.roles r ON r.id = ur.role_id
+      WHERE ur.user_id = $1
+        AND ur.is_active = true
+        AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+        AND r.is_active = true
+        AND r.code = ANY($2::text[])
+        AND r.organization_id = ANY($3::uuid[])
+      LIMIT 1
+      `,
+      [input.userId, input.roleCodes, input.organizationIds],
+    )) as Array<{ ok?: number }>;
+
+    return !!rows?.[0]?.ok;
+  }
+
+  private async getUserDepartmentIdsInOrg(input: {
+    userId: string;
+    organizationId: string;
+  }): Promise<string[]> {
+    // Prefer RH employees mapping when present.
+    try {
+      const rows = (await this.userRolesRepo.manager.query(
+        `
+        SELECT DISTINCT e.department_id AS "departmentId"
+        FROM module_c_rh.employees e
+        WHERE e.organization_id = $1
+          AND e.user_id = $2
+          AND e.department_id IS NOT NULL
+        `,
+        [input.organizationId, input.userId],
+      )) as Array<{ departmentId?: string }>;
+      const ids = rows.map((r) => String(r.departmentId ?? '')).filter(Boolean);
+      if (ids.length > 0) return this.uniqueStrings(ids);
+    } catch {
+      // ignore
+    }
+
+    // Fallback to core.users.metadata->>'department'
+    const fallback = (await this.userRolesRepo.manager.query(
+      `
+      SELECT (u.metadata->>'department')::text AS "departmentId"
+      FROM core.users u
+      WHERE u.id = $1 AND u.organization_id = $2
+      LIMIT 1
+      `,
+      [input.userId, input.organizationId],
+    )) as Array<{ departmentId?: string | null }>;
+
+    const dept = String(fallback?.[0]?.departmentId ?? '').trim();
+    return dept ? [dept] : [];
+  }
+
+  async createProjectV2(input: {
+    contextOrganizationId: string;
+    userId: string;
+    permissionCodes: string[];
+    dto: {
+      name: string;
+      code: string;
+      description?: string | null;
+      organizationIds: string[];
+      departments: Array<{ organizationId: string; departmentId: string }>;
+      managerIds?: string[];
+      memberIds?: string[];
+    };
+  }) {
+    if (!input.dto.name || !String(input.dto.name).trim()) {
+      throw new BadRequestException('name is required');
+    }
+    if (!input.dto.code || !String(input.dto.code).trim()) {
+      throw new BadRequestException('code is required');
+    }
+
+    const orgIds = this.uniqueStrings(this.normalizeUuidList(input.dto.organizationIds));
+    if (!orgIds.length) {
+      throw new BadRequestException('organizationIds is required');
+    }
+
+    const departments = Array.isArray(input.dto.departments) ? input.dto.departments : [];
+    const deptPairs = departments
+      .map((d) => ({
+        organizationId: String((d as any)?.organizationId ?? '').trim(),
+        departmentId: String((d as any)?.departmentId ?? '').trim(),
+      }))
+      .filter((d) => d.organizationId && d.departmentId);
+
+    if (!deptPairs.length) {
+      throw new BadRequestException('departments is required');
+    }
+
+    // Ensure departments are only declared inside selected orgs.
+    for (const d of deptPairs) {
+      if (!orgIds.includes(d.organizationId)) {
+        throw new BadRequestException(`Invalid departments: organizationId not in organizationIds (${d.organizationId})`);
+      }
+    }
+
+    const managerIds = this.uniqueStrings(this.normalizeUuidList(input.dto.managerIds));
+    const memberIds = this.uniqueStrings(this.normalizeUuidList(input.dto.memberIds));
+
+    const hasSystemRole = await this.userHasAnySystemRole(input.userId, input.contextOrganizationId);
+
+    if (!hasSystemRole) {
+      // Must have at least one of these tenant roles in at least one selected org.
+      const canCreate = await this.userHasAnyRoleInOrgs({
+        userId: input.userId,
+        organizationIds: orgIds,
+        roleCodes: ['COUNTRY_MANAGER', 'DEPARTMENT_MANAGER'],
+      });
+      if (!canCreate) {
+        throw new ForbiddenException('You are not allowed to create projects in the selected organizations');
+      }
+
+      // If user is only DEPARTMENT_MANAGER (and not COUNTRY_MANAGER) in a given org, restrict departments.
+      // We approximate by requiring department to match the user's own department in that org.
+      const countryManagerRows = (await this.userRolesRepo.manager.query(
+        `
+        SELECT DISTINCT r.organization_id AS "organizationId"
+        FROM core.user_roles ur
+        INNER JOIN core.roles r ON r.id = ur.role_id
+        WHERE ur.user_id = $1
+          AND ur.is_active = true
+          AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+          AND r.is_active = true
+          AND r.code = 'COUNTRY_MANAGER'
+          AND r.organization_id = ANY($2::uuid[])
+        `,
+        [input.userId, orgIds],
+      )) as Array<{ organizationId?: string }>;
+      const countryManagerOrgIds = new Set(countryManagerRows.map((r) => String(r.organizationId ?? '')).filter(Boolean));
+
+      for (const orgId of orgIds) {
+        if (countryManagerOrgIds.has(orgId)) {
+          continue;
+        }
+
+        const hasDeptManager = await this.userHasAnyRoleInOrgs({
+          userId: input.userId,
+          organizationIds: [orgId],
+          roleCodes: ['DEPARTMENT_MANAGER'],
+        });
+        if (!hasDeptManager) {
+          throw new ForbiddenException('You are not allowed to include one of the selected organizations');
+        }
+
+        const allowedDeptIds = await this.getUserDepartmentIdsInOrg({ userId: input.userId, organizationId: orgId });
+        if (!allowedDeptIds.length) {
+          throw new ForbiddenException('Department scope is missing for your DEPARTMENT_MANAGER role');
+        }
+
+        const requestedDeptIds = deptPairs
+          .filter((d) => d.organizationId === orgId)
+          .map((d) => d.departmentId);
+
+        const invalid = requestedDeptIds.filter((id) => !allowedDeptIds.includes(id));
+        if (invalid.length > 0) {
+          throw new ForbiddenException('You are not allowed to select one or more departments in this organization');
+        }
+      }
+    }
+
+    // Validate departments exist in module_c_rh.departments (and belong to the organization).
+    for (const d of deptPairs) {
+      const rows = (await this.projectsRepo.manager.query(
+        `
+        SELECT d.id AS id
+        FROM module_c_rh.departments d
+        WHERE d.id = $1 AND d.organization_id = $2
+        LIMIT 1
+        `,
+        [d.departmentId, d.organizationId],
+      )) as Array<{ id?: string }>;
+      if (!rows?.[0]?.id) {
+        throw new BadRequestException(`Invalid departmentId for organization (${d.organizationId})`);
+      }
+    }
+
+    // Choose a primary org/department for the legacy projects row.
+    const primaryOrgId = orgIds.includes(input.contextOrganizationId) ? input.contextOrganizationId : orgIds[0]!;
+    const primaryDept =
+      deptPairs.find((d) => d.organizationId === primaryOrgId)?.departmentId ??
+      deptPairs[0]!.departmentId;
+    const primaryManagerId = managerIds[0] ?? null;
+
+    const project = this.projectsRepo.create({
+      organizationId: primaryOrgId,
+      departmentId: primaryDept,
+      name: String(input.dto.name).trim(),
+      code: String(input.dto.code).trim(),
+      description: input.dto.description ?? null,
+      managerId: primaryManagerId,
+      createdBy: input.userId,
+    });
+
+    const saved = await this.projectsRepo.save(project);
+
+    // Link organizations
+    for (const orgId of orgIds) {
+      await this.projectsRepo.manager.query(
+        `
+        INSERT INTO module_b_projects.project_organizations (project_id, organization_id, org_role)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (project_id, organization_id) DO NOTHING
+        `,
+        [saved.id, orgId, orgId === primaryOrgId ? 'OWNER' : 'PARTICIPANT'],
+      );
+    }
+
+    // Link departments
+    for (const d of deptPairs) {
+      await this.projectsRepo.manager.query(
+        `
+        INSERT INTO module_b_projects.project_departments (project_id, organization_id, department_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (project_id, organization_id, department_id) DO NOTHING
+        `,
+        [saved.id, d.organizationId, d.departmentId],
+      );
+    }
+
+    // Link managers
+    for (const managerId of managerIds) {
+      await this.projectsRepo.manager.query(
+        `
+        INSERT INTO module_b_projects.project_managers (project_id, user_id, manager_role, added_by)
+        VALUES ($1, $2, 'LEAD', $3)
+        ON CONFLICT (project_id, user_id) DO NOTHING
+        `,
+        [saved.id, managerId, input.userId],
+      );
+    }
+
+    // Project members (for task RBAC + legacy membership)
+    const allMemberIds = this.uniqueStrings([...memberIds, ...managerIds]);
+    for (const userId of allMemberIds) {
+      await this.projectMembersRepo.save(
+        this.projectMembersRepo.create({
+          projectId: saved.id,
+          userId,
+          roleInProject: managerIds.includes(userId) ? 'MANAGER' : 'MEMBER',
+          addedBy: input.userId,
+        }),
+      );
+    }
+
+    return {
+      id: saved.id,
+      organizationId: saved.organizationId,
+      departmentId: saved.departmentId,
+      name: saved.name,
+      code: saved.code,
+      description: saved.description,
+      managerId: saved.managerId,
+      createdBy: saved.createdBy,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+    };
+  }
+
   private async resolveAccessibleOrganizationIdsForUser(userId: string): Promise<string[]> {
     const userRoles = await this.userRolesRepo.find({
       where: { userId, isActive: true },
@@ -251,6 +708,51 @@ export class ProjectsService {
       if (org && !organizationsMap.has(org.id)) {
         organizationsMap.set(org.id, org);
       }
+    }
+
+    // Also allow organizations where the user is linked through module_b_projects (member/manager) or tasks.
+    try {
+      const membershipOrgRows = (await this.projectsRepo.manager.query(
+        `
+        SELECT DISTINCT p.organization_id AS id
+        FROM module_b_projects.project_members pm
+        INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
+        WHERE pm.user_id = $1
+          AND p.organization_id IS NOT NULL
+        `,
+        [userId],
+      )) as Array<{ id?: string | null }>;
+
+      for (const row of membershipOrgRows) {
+        const id = String(row?.id ?? '').trim();
+        if (id && !organizationsMap.has(id)) {
+          // We only need the IDs; the Organization entity will be loaded on demand elsewhere.
+          organizationsMap.set(id, { id } as Organization);
+        }
+      }
+    } catch {
+      // ignore (schema/module may be missing in some environments)
+    }
+
+    try {
+      const taskOrgRows = (await this.projectsRepo.manager.query(
+        `
+        SELECT DISTINCT t.organization_id AS id
+        FROM module_b_projects.tasks t
+        WHERE (t.assignee_id = $1 OR t.created_by = $1)
+          AND t.organization_id IS NOT NULL
+        `,
+        [userId],
+      )) as Array<{ id?: string | null }>;
+
+      for (const row of taskOrgRows) {
+        const id = String(row?.id ?? '').trim();
+        if (id && !organizationsMap.has(id)) {
+          organizationsMap.set(id, { id } as Organization);
+        }
+      }
+    } catch {
+      // ignore
     }
 
     const parentIds = Array.from(organizationsMap.keys());
@@ -594,7 +1096,6 @@ export class ProjectsService {
       .leftJoin(Task, 't', 't.id = c.task_id')
       .leftJoin('c.user', 'u')
       .where('c.task_id = :taskId', { taskId: input.taskId })
-      .andWhere('t.organization_id = :orgId', { orgId: input.contextOrganizationId })
       .orderBy('c.createdAt', 'ASC')
       .getMany();
 
@@ -702,97 +1203,122 @@ export class ProjectsService {
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.project', 'p')
       .leftJoinAndSelect('t.assignee', 'a')
-      .where('t.id = :id', { id: input.taskId })
-      .andWhere('t.organization_id = :orgId', { orgId: input.contextOrganizationId });
+      .where('t.id = :id', { id: input.taskId });
 
     if (readScope === 'own') {
       qb.andWhere('(t.assignee_id = :userId OR t.created_by = :userId)', {
         userId: input.userId,
       });
+    } else if (readScope === 'project') {
+      qb.andWhere(
+        `t.project_id IN (
+          SELECT pm.project_id
+          FROM module_b_projects.project_members pm
+          WHERE pm.user_id = :userId
+        )`,
+        { userId: input.userId },
+      );
     } else if (readScope === 'department' || readScope === 'team') {
-      const rh = await this.resolveRhContextForUser({
-        userId: input.userId,
-        organizationId: input.contextOrganizationId,
-      });
-
-      if (!rh) {
-        qb.andWhere('(t.assignee_id = :userId OR t.created_by = :userId)', {
-          userId: input.userId,
-        });
-      } else if (readScope === 'department') {
-        if (!rh.departmentId) {
-          qb.andWhere('(t.assignee_id = :userId OR t.created_by = :userId)', {
-            userId: input.userId,
-          });
-        } else {
-          qb.andWhere(
-            `(
-              t.assignee_id IN (
-                SELECT e.user_id
-                FROM module_c_rh.employees e
-                WHERE e.organization_id = :ctxOrgId
-                  AND e.department_id = :deptId
-              )
-              OR t.created_by IN (
-                SELECT e.user_id
-                FROM module_c_rh.employees e
-                WHERE e.organization_id = :ctxOrgId
-                  AND e.department_id = :deptId
-              )
-            )`,
-            {
-              ctxOrgId: input.contextOrganizationId,
-              deptId: rh.departmentId,
-            },
-          );
-        }
-      } else {
-        qb.andWhere(
-          `(
-            t.assignee_id IN (
-              WITH RECURSIVE team AS (
-                SELECT e.id, e.user_id
-                FROM module_c_rh.employees e
-                WHERE e.id = :employeeId AND e.organization_id = :ctxOrgId
-                UNION ALL
-                SELECT e2.id, e2.user_id
-                FROM module_c_rh.employees e2
-                INNER JOIN team t0 ON e2.manager_id = t0.id
-                WHERE e2.organization_id = :ctxOrgId
-              )
-              SELECT user_id FROM team WHERE user_id IS NOT NULL
-            )
-            OR t.created_by IN (
-              WITH RECURSIVE team AS (
-                SELECT e.id, e.user_id
-                FROM module_c_rh.employees e
-                WHERE e.id = :employeeId AND e.organization_id = :ctxOrgId
-                UNION ALL
-                SELECT e2.id, e2.user_id
-                FROM module_c_rh.employees e2
-                INNER JOIN team t0 ON e2.manager_id = t0.id
-                WHERE e2.organization_id = :ctxOrgId
-              )
-              SELECT user_id FROM team WHERE user_id IS NOT NULL
-            )
-          )`,
-          {
-            ctxOrgId: input.contextOrganizationId,
-            employeeId: rh.employeeId,
-          },
-        );
-      }
     }
 
     const task = await qb.getOne();
     if (!task) {
       const exists = await this.tasksRepo.findOne({
-        where: { id: input.taskId, organizationId: input.contextOrganizationId },
+        where: { id: input.taskId },
       });
-      if (!exists) {
-        throw new NotFoundException('Task not found');
-      }
+      if (!exists) throw new NotFoundException('Task not found');
       throw new ForbiddenException('Task not accessible');
+    }
+
+    const taskOrgId = String(task.organizationId ?? '').trim();
+    if (!taskOrgId) {
+      throw new ForbiddenException('Task organization is missing');
+    }
+
+    // Enforce cross-organization visibility: user must have access to the task's organization.
+    const allowedOrgIds = await this.resolveAccessibleOrganizationIdsForUser(input.userId);
+    if (!allowedOrgIds.includes(taskOrgId)) {
+      throw new ForbiddenException('Task organization not accessible');
+    }
+
+    // For department/team scopes, apply the org-specific constraints using the task's organization.
+    if (readScope === 'department' || readScope === 'team') {
+      const rh = await this.resolveRhContextForUser({
+        userId: input.userId,
+        organizationId: taskOrgId,
+      });
+
+      if (!rh) {
+        if (task.assigneeId !== input.userId && task.createdBy !== input.userId) {
+          throw new ForbiddenException('Task not accessible');
+        }
+      } else if (readScope === 'department') {
+        if (!rh.departmentId) {
+          if (task.assigneeId !== input.userId && task.createdBy !== input.userId) {
+            throw new ForbiddenException('Task not accessible');
+          }
+        } else {
+          const rows = (await this.tasksRepo.manager.query(
+            `
+            SELECT 1 AS ok
+            WHERE (
+              $1::uuid IN (
+                SELECT e.user_id
+                FROM module_c_rh.employees e
+                WHERE e.organization_id = $3
+                  AND e.department_id = $2
+              )
+              OR $1::uuid IN (
+                SELECT e.user_id
+                FROM module_c_rh.employees e
+                WHERE e.organization_id = $3
+                  AND e.department_id = $2
+              )
+            )
+            LIMIT 1
+            `,
+            [task.assigneeId ?? task.createdBy, rh.departmentId, taskOrgId],
+          )) as Array<{ ok?: number }>;
+
+          // If task has no assignee, fallback to created_by checks
+          if (!rows?.[0]?.ok) {
+            const ok =
+              (task.assigneeId &&
+                (await this.tasksRepo.manager.query(
+                  `
+                  SELECT 1 AS ok
+                  FROM module_c_rh.employees e
+                  WHERE e.organization_id = $1
+                    AND e.department_id = $2
+                    AND e.user_id = $3
+                  LIMIT 1
+                  `,
+                  [taskOrgId, rh.departmentId, task.assigneeId],
+                ))?.[0]?.ok) ||
+              (await this.tasksRepo.manager.query(
+                `
+                SELECT 1 AS ok
+                FROM module_c_rh.employees e
+                WHERE e.organization_id = $1
+                  AND e.department_id = $2
+                  AND e.user_id = $3
+                LIMIT 1
+                `,
+                [taskOrgId, rh.departmentId, task.createdBy],
+              ))?.[0]?.ok;
+
+            if (!ok) {
+              throw new ForbiddenException('Task not accessible');
+            }
+          }
+        }
+      } else {
+        // team scope: keep existing safe fallback (own) when hierarchy context isn't reliable
+        // if RH data is present but we cannot safely assert hierarchy, allow own only.
+        if (task.assigneeId !== input.userId && task.createdBy !== input.userId) {
+          throw new ForbiddenException('Task not accessible');
+        }
+      }
     }
 
     return task;
@@ -1317,7 +1843,10 @@ export class ProjectsService {
     const readScope = this.resolveTaskReadScope(input.permissionCodes ?? []);
 
     const candidateOrgIds =
-      readScope === 'global' || readScope === 'tenant'
+      readScope === 'global' ||
+      readScope === 'tenant' ||
+      readScope === 'project' ||
+      readScope === 'own'
         ? desiredOrgIds.length
           ? desiredOrgIds
           : allowedOrgIds

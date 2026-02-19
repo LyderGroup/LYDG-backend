@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Patch,
@@ -467,17 +468,61 @@ export class ProjectsLookupsController {
 
     const plannedEndDate = this.assertValidDateOrNull(body?.plannedEndDate);
 
-    const result = await this.dataSource.query(
+    const access = (await this.dataSource.query(
       `
-      UPDATE module_b_projects.projects p
-      SET planned_end_date = $1,
-          updated_at = NOW()
-      WHERE p.id = $2
-        AND p.organization_id = $3
-      RETURNING p.id
+      SELECT 1 AS ok
+      FROM module_b_projects.projects p
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = p.id
+       AND pm.user_id = $2
+      LEFT JOIN module_b_projects.project_managers pma
+        ON pma.project_id = p.id
+       AND pma.user_id = $2
+      WHERE p.id = $1
+        AND (
+          pm.id IS NOT NULL
+          OR pma.id IS NOT NULL
+          OR p.manager_id = $2
+          OR p.created_by = $2
+        )
+      LIMIT 1
       `,
-      [plannedEndDate, projectId.trim(), tenant.id],
-    );
+      [projectId.trim(), String(currentUser.id)],
+    )) as Array<{ ok?: number }>;
+
+    if (!access?.[0]?.ok) {
+      const exists = (await this.dataSource.query(
+        `
+        SELECT 1 AS ok
+        FROM module_b_projects.projects p
+        WHERE p.id = $1
+        LIMIT 1
+        `,
+        [projectId.trim()],
+      )) as Array<{ ok?: number }>;
+
+      if (exists?.[0]?.ok) {
+        throw new ForbiddenException('Missing required permission');
+      }
+      throw new BadRequestException('Project not found');
+    }
+
+    let result: any;
+    try {
+      result = await this.dataSource.query(
+        `
+        UPDATE module_b_projects.projects p
+        SET planned_end_date = $1,
+            updated_at = NOW()
+        WHERE p.id = $2
+        RETURNING p.id
+        `,
+        [plannedEndDate, projectId.trim()],
+      );
+    } catch (e: any) {
+      const msg = String(e?.message ?? 'Update failed');
+      throw new BadRequestException(msg);
+    }
 
     const rows = Array.isArray(result)
       ? result
@@ -490,24 +535,21 @@ export class ProjectsLookupsController {
       (typeof (result as any)?.rowCount === 'number' ? (result as any).rowCount > 0 : false);
 
     if (!hasUpdated) {
-      const existsElsewhere = (await this.dataSource.query(
+      const existsAfter = (await this.dataSource.query(
         `
-        SELECT p.id, p.organization_id AS "organizationId"
+        SELECT 1 AS ok
         FROM module_b_projects.projects p
         WHERE p.id = $1
         LIMIT 1
         `,
         [projectId.trim()],
-      )) as Array<{ id?: string; organizationId?: string }>;
+      )) as Array<{ ok?: number }>;
 
-      if (existsElsewhere[0]?.id) {
+      if (existsAfter?.[0]?.ok) {
         throw new BadRequestException(
-          `Project not found in this organization (tenant mismatch). projectId=${projectId.trim()} tenantOrgId=${String(
-            tenant.id,
-          )} projectOrgId=${String(existsElsewhere[0]?.organizationId ?? '')}`,
+          `Project deadline update failed unexpectedly. projectId=${projectId.trim()} userId=${String(currentUser.id)}`,
         );
       }
-
       throw new BadRequestException('Project not found');
     }
 
@@ -529,21 +571,103 @@ export class ProjectsLookupsController {
       throw new BadRequestException('projectId is required');
     }
 
+    const access = (await this.dataSource.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.projects p
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = p.id
+       AND pm.user_id = $2
+      LEFT JOIN module_b_projects.project_managers pma
+        ON pma.project_id = p.id
+       AND pma.user_id = $2
+      WHERE p.id = $1
+        AND (
+          pm.id IS NOT NULL
+          OR pma.id IS NOT NULL
+          OR p.manager_id = $2
+          OR p.created_by = $2
+        )
+      LIMIT 1
+      `,
+      [projectId.trim(), String(currentUser.id)],
+    )) as Array<{ ok?: number }>;
+
+    if (!access?.[0]?.ok) {
+      const exists = (await this.dataSource.query(
+        `
+        SELECT 1 AS ok
+        FROM module_b_projects.projects p
+        WHERE p.id = $1
+        LIMIT 1
+        `,
+        [projectId.trim()],
+      )) as Array<{ ok?: number }>;
+
+      if (exists?.[0]?.ok) {
+        throw new ForbiddenException('Missing required permission');
+      }
+      throw new BadRequestException('Project not found');
+    }
+
     const rows = (await this.dataSource.query(
       `
-      SELECT DISTINCT u.id, u.first_name AS "firstName", u.last_name AS "lastName", u.email
+      SELECT DISTINCT
+        u.id,
+        u.first_name AS "firstName",
+        u.last_name AS "lastName",
+        u.email,
+        COALESCE(o.name_code, o.name) AS "organizationLabel",
+        COALESCE(e.department_id, NULLIF(TRIM(u.metadata->>'department'), '')::uuid) AS "departmentId",
+        d.name AS "departmentName",
+        COUNT(t.id)::int AS "assignedTasksCount",
+        COALESCE(AVG(t.progress), 0)::float AS "assignedTasksAvgProgress",
+        MIN(t.due_date) FILTER (WHERE t.due_date IS NOT NULL) AS "assignedTasksNearestDueDate"
       FROM module_b_projects.project_members pm
       INNER JOIN core.users u ON u.id = pm.user_id
-      INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
+      LEFT JOIN core.organizations o ON o.id = u.organization_id
+      LEFT JOIN LATERAL (
+        SELECT e0.department_id
+        FROM module_c_rh.employees e0
+        WHERE e0.user_id = u.id
+          AND e0.department_id IS NOT NULL
+        ORDER BY e0.created_at DESC
+        LIMIT 1
+      ) e ON true
+      LEFT JOIN module_c_rh.departments d
+        ON d.id = COALESCE(e.department_id, NULLIF(TRIM(u.metadata->>'department'), '')::uuid)
+      LEFT JOIN module_b_projects.tasks t
+        ON t.project_id = pm.project_id
+       AND t.assignee_id = u.id
       WHERE pm.project_id = $1
-        AND p.organization_id = $2
         AND u.is_active = true
         AND u.deleted_at IS NULL
+      GROUP BY
+        u.id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        o.name_code,
+        o.name,
+        e.department_id,
+        d.name,
+        u.metadata
       ORDER BY u.first_name ASC, u.last_name ASC
       LIMIT 500
       `,
-      [projectId, tenant.id],
-    )) as Array<{ id: string; firstName: string; lastName: string; email: string }>;
+      [projectId.trim()],
+    )) as Array<{
+      id: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      organizationLabel: string | null;
+      departmentId: string | null;
+      departmentName: string | null;
+      assignedTasksCount: number;
+      assignedTasksAvgProgress: number;
+      assignedTasksNearestDueDate: string | null;
+    }>; 
 
     return rows;
   }

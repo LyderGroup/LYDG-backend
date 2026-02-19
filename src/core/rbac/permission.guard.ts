@@ -156,6 +156,13 @@ export class PermissionGuard implements CanActivate {
     try {
       const params = (input.request?.params ?? {}) as Record<string, any>;
 
+      const projectId =
+        typeof params.projectId === 'string' && params.projectId.trim()
+          ? params.projectId.trim()
+          : typeof params.id === 'string' && params.id.trim() && String(input.request?.route?.path ?? '').includes('projects')
+            ? params.id.trim()
+            : undefined;
+
       const taskId =
         typeof params.id === 'string' && params.id.trim()
           ? params.id.trim()
@@ -173,10 +180,10 @@ export class PermissionGuard implements CanActivate {
               SELECT
                 t.project_id AS project_id,
                 CASE
-                  WHEN COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
+                  WHEN p.created_by = $1 OR COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
                   ELSE 0
                 END AS is_manager,
-                CASE WHEN pm.id IS NULL AND p.manager_id <> $1 THEN 0 ELSE 1 END AS is_member
+                CASE WHEN pm.id IS NULL AND p.manager_id <> $1 AND p.created_by <> $1 THEN 0 ELSE 1 END AS is_member
               FROM module_b_projects.tasks t
               INNER JOIN module_b_projects.projects p ON p.id = t.project_id
               LEFT JOIN module_b_projects.project_members pm
@@ -190,10 +197,10 @@ export class PermissionGuard implements CanActivate {
               SELECT
                 t.project_id AS project_id,
                 CASE
-                  WHEN COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
+                  WHEN p.created_by = $1 OR COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' OR p.manager_id = $1 THEN 1
                   ELSE 0
                 END AS is_manager,
-                CASE WHEN pm.id IS NULL AND p.manager_id <> $1 THEN 0 ELSE 1 END AS is_member
+                CASE WHEN pm.id IS NULL AND p.manager_id <> $1 AND p.created_by <> $1 THEN 0 ELSE 1 END AS is_member
               FROM module_b_projects.subtasks s
               INNER JOIN module_b_projects.tasks t ON t.id = s.task_id
               INNER JOIN module_b_projects.projects p ON p.id = t.project_id
@@ -205,6 +212,44 @@ export class PermissionGuard implements CanActivate {
               LIMIT 1
               `,
           [input.userId, taskId ?? subtaskId, input.organizationId],
+        )) as Array<{ project_id?: string; is_manager?: number; is_member?: number }>;
+
+        if (!rows[0]?.project_id || !rows[0]?.is_member) {
+          return;
+        }
+
+        input.permissions.add('projects.task.read.project');
+        if (rows[0]?.is_manager) {
+          input.permissions.add('projects.task.write.project');
+          input.permissions.add('projects.task.delete.project');
+          input.permissions.add('projects.task.validate.project');
+        }
+
+        return;
+      }
+
+      if (projectId) {
+        const rows = (await this.userRolesRepo.manager.query(
+          `
+          SELECT
+            p.id AS project_id,
+            CASE
+              WHEN p.created_by = $1 OR p.manager_id = $1 OR COALESCE(pm.role_in_project, 'MEMBER') = 'MANAGER' THEN 1
+              ELSE 0
+            END AS is_manager,
+            CASE
+              WHEN p.created_by = $1 OR p.manager_id = $1 OR pm.id IS NOT NULL THEN 1
+              ELSE 0
+            END AS is_member
+          FROM module_b_projects.projects p
+          LEFT JOIN module_b_projects.project_members pm
+            ON pm.project_id = p.id
+           AND pm.user_id = $1
+          WHERE p.id = $2
+            AND p.organization_id = $3
+          LIMIT 1
+          `,
+          [input.userId, projectId, input.organizationId],
         )) as Array<{ project_id?: string; is_manager?: number; is_member?: number }>;
 
         if (!rows[0]?.project_id || !rows[0]?.is_member) {

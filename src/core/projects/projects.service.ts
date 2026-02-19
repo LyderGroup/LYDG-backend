@@ -286,7 +286,6 @@ export class ProjectsService {
         throw new BadRequestException('Invalid departmentId');
       }
 
-      // Try to sync core department into RH departments, so FK projects.department_id -> module_c_rh.departments stays valid
       try {
         await this.projectsRepo.manager.query(
           `
@@ -307,8 +306,7 @@ export class ProjectsService {
           `,
           [departmentId, input.contextOrganizationId, String(coreDept.name ?? ''), String(coreDept.code ?? '')],
         );
-
-        // Verify it exists now
+ 
         const verify = (await this.projectsRepo.manager.query(
           `
           SELECT d.id AS id
@@ -330,8 +328,7 @@ export class ProjectsService {
             'Module RH manquant: impossible de créer un projet sans module_c_rh.departments. Exécute database/modules/module_c_rh.sql puis réessaie.',
           );
         }
-
-        // Likely unique constraint on (organization_id, code)
+ 
         throw new BadRequestException(
           "Impossible de synchroniser le département dans RH (conflit code ou contrainte). Vérifie que core.departments et module_c_rh.departments sont alignés.",
         );
@@ -357,13 +354,19 @@ export class ProjectsService {
 
     const uniqueUserIds = new Set<string>(memberIds);
     if (managerId) uniqueUserIds.add(managerId);
+    uniqueUserIds.add(input.userId);
 
     for (const userId of uniqueUserIds) {
       await this.projectMembersRepo.save(
         this.projectMembersRepo.create({
           projectId: saved.id,
           userId,
-          roleInProject: managerId && userId === managerId ? 'MANAGER' : 'MEMBER',
+          roleInProject:
+            managerId && userId === managerId
+              ? 'MANAGER'
+              : userId === input.userId
+                ? 'OWNER'
+                : 'MEMBER',
           addedBy: input.userId,
         }),
       );
@@ -442,8 +445,7 @@ export class ProjectsService {
   private async getUserDepartmentIdsInOrg(input: {
     userId: string;
     organizationId: string;
-  }): Promise<string[]> {
-    // Prefer RH employees mapping when present.
+  }): Promise<string[]> { 
     try {
       const rows = (await this.userRolesRepo.manager.query(
         `
@@ -457,11 +459,8 @@ export class ProjectsService {
       )) as Array<{ departmentId?: string }>;
       const ids = rows.map((r) => String(r.departmentId ?? '')).filter(Boolean);
       if (ids.length > 0) return this.uniqueStrings(ids);
-    } catch {
-      // ignore
-    }
-
-    // Fallback to core.users.metadata->>'department'
+    } catch { 
+    } 
     const fallback = (await this.userRolesRepo.manager.query(
       `
       SELECT (u.metadata->>'department')::text AS "departmentId"
@@ -513,8 +512,7 @@ export class ProjectsService {
     if (!deptPairs.length) {
       throw new BadRequestException('departments is required');
     }
-
-    // Ensure departments are only declared inside selected orgs.
+ 
     for (const d of deptPairs) {
       if (!orgIds.includes(d.organizationId)) {
         throw new BadRequestException(`Invalid departments: organizationId not in organizationIds (${d.organizationId})`);
@@ -526,8 +524,7 @@ export class ProjectsService {
 
     const hasSystemRole = await this.userHasAnySystemRole(input.userId, input.contextOrganizationId);
 
-    if (!hasSystemRole) {
-      // Must have at least one of these tenant roles in at least one selected org.
+    if (!hasSystemRole) { 
       const canCreate = await this.userHasAnyRoleInOrgs({
         userId: input.userId,
         organizationIds: orgIds,
@@ -537,8 +534,6 @@ export class ProjectsService {
         throw new ForbiddenException('You are not allowed to create projects in the selected organizations');
       }
 
-      // If user is only DEPARTMENT_MANAGER (and not COUNTRY_MANAGER) in a given org, restrict departments.
-      // We approximate by requiring department to match the user's own department in that org.
       const countryManagerRows = (await this.userRolesRepo.manager.query(
         `
         SELECT DISTINCT r.organization_id AS "organizationId"
@@ -584,8 +579,7 @@ export class ProjectsService {
         }
       }
     }
-
-    // Validate departments exist in module_c_rh.departments (and belong to the organization).
+ 
     for (const d of deptPairs) {
       const rows = (await this.projectsRepo.manager.query(
         `
@@ -600,8 +594,7 @@ export class ProjectsService {
         throw new BadRequestException(`Invalid departmentId for organization (${d.organizationId})`);
       }
     }
-
-    // Choose a primary org/department for the legacy projects row.
+ 
     const primaryOrgId = orgIds.includes(input.contextOrganizationId) ? input.contextOrganizationId : orgIds[0]!;
     const primaryDept =
       deptPairs.find((d) => d.organizationId === primaryOrgId)?.departmentId ??
@@ -657,13 +650,17 @@ export class ProjectsService {
     }
 
     // Project members (for task RBAC + legacy membership)
-    const allMemberIds = this.uniqueStrings([...memberIds, ...managerIds]);
+    const allMemberIds = this.uniqueStrings([...memberIds, ...managerIds, input.userId]);
     for (const userId of allMemberIds) {
       await this.projectMembersRepo.save(
         this.projectMembersRepo.create({
           projectId: saved.id,
           userId,
-          roleInProject: managerIds.includes(userId) ? 'MANAGER' : 'MEMBER',
+          roleInProject: managerIds.includes(userId)
+            ? 'MANAGER'
+            : userId === input.userId
+              ? 'OWNER'
+              : 'MEMBER',
           addedBy: input.userId,
         }),
       );
@@ -1212,9 +1209,14 @@ export class ProjectsService {
     } else if (readScope === 'project') {
       qb.andWhere(
         `t.project_id IN (
-          SELECT pm.project_id
-          FROM module_b_projects.project_members pm
-          WHERE pm.user_id = :userId
+          SELECT p.id
+          FROM module_b_projects.projects p
+          LEFT JOIN module_b_projects.project_members pm
+            ON pm.project_id = p.id
+           AND pm.user_id = :userId
+          WHERE pm.user_id IS NOT NULL
+             OR p.created_by = :userId
+             OR p.manager_id = :userId
         )`,
         { userId: input.userId },
       );
@@ -1732,11 +1734,13 @@ export class ProjectsService {
     const rows = (await this.tasksRepo.manager.query(
       `
       SELECT 1 AS ok
-      FROM module_b_projects.project_members pm
-      INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
-      WHERE pm.user_id = $1
-        AND pm.project_id = $2
+      FROM module_b_projects.projects p
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = p.id
+       AND pm.user_id = $1
+      WHERE p.id = $2
         AND p.organization_id = $3
+        AND (pm.user_id IS NOT NULL OR p.created_by = $1)
       LIMIT 1
       `,
       [input.userId, input.projectId, input.contextOrganizationId],
@@ -1755,12 +1759,19 @@ export class ProjectsService {
     const rows = (await this.tasksRepo.manager.query(
       `
       SELECT 1 AS ok
-      FROM module_b_projects.project_members pm
-      INNER JOIN module_b_projects.projects p ON p.id = pm.project_id
-      WHERE pm.user_id = $1
-        AND pm.project_id = $2
+      FROM module_b_projects.projects p
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = p.id
+       AND pm.user_id = $1
+      WHERE p.id = $2
         AND p.organization_id = $3
-        AND pm.role_in_project = 'MANAGER'
+        AND (
+          p.created_by = $1
+          OR (
+            pm.user_id IS NOT NULL
+            AND pm.role_in_project = 'MANAGER'
+          )
+        )
       LIMIT 1
       `,
       [input.userId, input.projectId, input.contextOrganizationId],
@@ -1871,9 +1882,14 @@ export class ProjectsService {
     } else if (readScope === 'project') {
       qb.andWhere(
         `t.project_id IN (
-          SELECT pm.project_id
-          FROM module_b_projects.project_members pm
-          WHERE pm.user_id = :userId
+          SELECT p.id
+          FROM module_b_projects.projects p
+          LEFT JOIN module_b_projects.project_members pm
+            ON pm.project_id = p.id
+           AND pm.user_id = :userId
+          WHERE pm.user_id IS NOT NULL
+             OR p.created_by = :userId
+             OR p.manager_id = :userId
         )`,
         { userId: input.userId },
       );

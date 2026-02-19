@@ -496,12 +496,21 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
+      'projects.task.create.project',
+      'projects.task.create.tenant',
       'projects.task.write.own',
       'projects.task.write.project',
       'projects.task.write.team',
       'projects.task.write.department',
       'projects.task.write.tenant',
       'projects.task.write.global',
+      'projects.task.delete.own',
+      'projects.task.delete.project',
+      'projects.task.delete.tenant',
+      'projects.task.delete.global',
+      'projects.task.read.project',
+      'projects.task.read.tenant',
+      'projects.task.read.global',
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -568,6 +577,12 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
+      'projects.task.write.own',
+      'projects.task.write.project',
+      'projects.task.write.team',
+      'projects.task.write.department',
+      'projects.task.write.tenant',
+      'projects.task.write.global',
       'projects.task.delete.own',
       'projects.task.delete.project',
       'projects.task.delete.tenant',

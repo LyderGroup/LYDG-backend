@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { Organization } from '../organizations/organizations.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { Role } from '../rbac/role.entity';
@@ -28,9 +29,11 @@ import { ProjectsService } from './projects.service';
 import { WorkflowValidationService } from './workflow-validation.service';
 import { TaskDependencyService } from './task-dependency.service';
 import { TasksController } from './tasks.controller';
+import { DeadlineReminderService } from './deadline-reminder.service';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       Project,
       Task,
@@ -60,6 +63,7 @@ import { TasksController } from './tasks.controller';
     TaskCommentsRealtimeService,
     ProjectCommentsGateway,
     ProjectCommentsRealtimeService,
+    DeadlineReminderService,
   ],
   exports: [ProjectsService, WorkflowValidationService, TaskDependencyService],
 })

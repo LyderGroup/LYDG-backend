@@ -21,7 +21,8 @@ export type NotificationType =
   | 'task_comment'
   | 'project_created'
   | 'project_comment'
-  | 'mention';
+  | 'mention'
+  | 'deadline_reminder';
 
 @Entity({ schema: 'core', name: 'notifications' })
 @Index(['userId', 'isRead'])
@@ -43,6 +44,7 @@ export class Notification {
   @Column({
     type: 'varchar',
     length: 50,
+    name: 'notification_type',
   })
   type!: NotificationType;
 

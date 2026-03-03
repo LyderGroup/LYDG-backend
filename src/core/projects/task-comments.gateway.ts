@@ -123,7 +123,13 @@ export class TaskCommentsGateway {
     // Vérifier d'abord les permissions RBAC globales (system role = accès total)
     const hasSystemRole = await this.rbacService.userHasAnySystemRole(userId, organizationId);
     if (hasSystemRole) {
-      await client.join(this.getTaskRoom({ organizationId, taskId }));
+      // Pour les system roles, on join le room de l'organisation de la tâche
+      const taskOrg = await this.organizationsRepo.manager.query(
+        `SELECT organization_id FROM module_b_projects.tasks WHERE id = $1 LIMIT 1`,
+        [taskId],
+      );
+      const taskOrgId = taskOrg[0]?.organization_id || organizationId;
+      await client.join(this.getTaskRoom({ organizationId: taskOrgId, taskId }));
       return { ok: true };
     }
 
@@ -131,7 +137,18 @@ export class TaskCommentsGateway {
     const hasTenantRead = await this.userHasPermission(userId, organizationId, 'projects.task.read.tenant');
     const hasGlobalRead = await this.userHasPermission(userId, organizationId, 'projects.task.read.global');
     
-    if (hasTenantRead || hasGlobalRead) {
+    if (hasGlobalRead) {
+      // Pour global read, on join le room de l'organisation de la tâche
+      const taskOrg = await this.organizationsRepo.manager.query(
+        `SELECT organization_id FROM module_b_projects.tasks WHERE id = $1 LIMIT 1`,
+        [taskId],
+      );
+      const taskOrgId = taskOrg[0]?.organization_id || organizationId;
+      await client.join(this.getTaskRoom({ organizationId: taskOrgId, taskId }));
+      return { ok: true };
+    }
+
+    if (hasTenantRead) {
       // Vérifier que la tâche appartient bien à l'organisation
       const taskExists = await this.organizationsRepo.manager.query(
         `SELECT 1 AS ok FROM module_b_projects.tasks WHERE id = $1 AND organization_id = $2 LIMIT 1`,
@@ -141,21 +158,19 @@ export class TaskCommentsGateway {
         await client.join(this.getTaskRoom({ organizationId, taskId }));
         return { ok: true };
       }
-      return { ok: false, reason: 'not_found' };
     }
 
-    // Vérification standard : membre du projet, manager, créateur, ou assigné
+    // Vérification cross-organisation : membre du projet, manager, créateur, ou assigné
+    // On ne vérifie plus l'organisation de la tâche, seulement l'appartenance au projet
     const ok = (await this.organizationsRepo.manager.query(
       `
-      SELECT 1 AS ok
+      SELECT t.organization_id AS task_org_id
       FROM module_b_projects.tasks t
       INNER JOIN module_b_projects.projects p ON p.id = t.project_id
       LEFT JOIN module_b_projects.project_members pm
         ON pm.project_id = t.project_id
        AND pm.user_id = $2
       WHERE t.id = $1
-        AND t.organization_id = $3
-        AND p.organization_id = $3
         AND (
           pm.id IS NOT NULL
           OR p.created_by = $2
@@ -165,14 +180,15 @@ export class TaskCommentsGateway {
         )
       LIMIT 1
       `,
-      [taskId, userId, organizationId],
-    )) as Array<{ ok?: number }>;
+      [taskId, userId],
+    )) as Array<{ task_org_id?: string }>;
 
-    if (!ok[0]?.ok) {
-      return { ok: false, reason: 'forbidden' };
+    if (!ok[0]?.task_org_id) {
+      return { ok: false, reason: 'not_found' };
     }
 
-    await client.join(this.getTaskRoom({ organizationId, taskId }));
+    // Join le room de l'organisation de la tâche (pas celle du client)
+    await client.join(this.getTaskRoom({ organizationId: ok[0].task_org_id, taskId }));
     return { ok: true };
   }
 
@@ -187,7 +203,8 @@ export class TaskCommentsGateway {
     const result = await this.userRolesRepo
       .createQueryBuilder('ur')
       .innerJoin('ur.role', 'r')
-      .innerJoin('r.permissions', 'p')
+      .innerJoin('r.rolePermissions', 'rp')
+      .innerJoin('rp.permission', 'p')
       .where('ur.userId = :userId', { userId })
       .andWhere('ur.isActive = true')
       .andWhere('(ur.expiresAt IS NULL OR ur.expiresAt > NOW())')

@@ -16,6 +16,8 @@ class CreateProjectV2Dto {
   name!: string;
   code!: string;
   description?: string | null;
+  startDate?: string | null;
+  plannedEndDate?: string | null;
 
   organizationIds!: string[];
   departments!: Array<{ organizationId: string; departmentId: string }>;

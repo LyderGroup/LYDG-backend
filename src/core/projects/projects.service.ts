@@ -876,6 +876,8 @@ export class ProjectsService {
       name: string;
       code: string;
       description?: string | null;
+      startDate?: string | null;
+      plannedEndDate?: string | null;
       organizationIds: string[];
       departments: Array<{ organizationId: string; departmentId: string }>;
       managerIds?: string[];
@@ -1000,6 +1002,8 @@ export class ProjectsService {
       name: String(input.dto.name).trim(),
       code: String(input.dto.code).trim(),
       description: input.dto.description ?? null,
+      startDate: input.dto.startDate ?? null,
+      plannedEndDate: input.dto.plannedEndDate ?? null,
       managerId: primaryManagerId,
       createdBy: input.userId,
     });
@@ -1204,6 +1208,28 @@ export class ProjectsService {
       )) as Array<{ id?: string | null }>;
 
       for (const row of taskOrgRows) {
+        const id = String(row?.id ?? '').trim();
+        if (id && !organizationsMap.has(id)) {
+          organizationsMap.set(id, { id } as Organization);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // Also include organizations of projects where user is manager or creator
+    try {
+      const projectOrgRows = (await this.projectsRepo.manager.query(
+        `
+        SELECT DISTINCT p.organization_id AS id
+        FROM module_b_projects.projects p
+        WHERE (p.manager_id = $1 OR p.created_by = $1)
+          AND p.organization_id IS NOT NULL
+        `,
+        [userId],
+      )) as Array<{ id?: string | null }>;
+
+      for (const row of projectOrgRows) {
         const id = String(row?.id ?? '').trim();
         if (id && !organizationsMap.has(id)) {
           organizationsMap.set(id, { id } as Organization);
@@ -1766,7 +1792,16 @@ export class ProjectsService {
       throw new ForbiddenException('Task organization is missing');
     }
 
-    // Enforce cross-organization visibility: user must have access to the task's organization.
+    // Cross-organization access: allow if user is related to the task/project
+    // (member, manager, creator, assignee) regardless of their organization
+    const isRelatedToTask = await this.isUserRelatedToTask(input.userId, input.taskId);
+    
+    if (isRelatedToTask) {
+      // User is directly related to the task/project, allow access
+      return task;
+    }
+
+    // For non-related users, enforce organization-based access
     const allowedOrgIds = await this.resolveAccessibleOrganizationIdsForUser(input.userId);
     if (!allowedOrgIds.includes(taskOrgId)) {
       throw new ForbiddenException('Task organization not accessible');
@@ -2321,6 +2356,35 @@ export class ProjectsService {
     if (!rows[0]?.ok) {
       throw new ForbiddenException('User is not a manager of this project');
     }
+  }
+
+  /**
+   * Vérifie si un utilisateur est lié à une tâche (cross-organisation).
+   * Un utilisateur est lié s'il est: membre du projet, manager du projet, créateur du projet, assigné à la tâche, ou créateur de la tâche.
+   */
+  private async isUserRelatedToTask(userId: string, taskId: string): Promise<boolean> {
+    const rows = (await this.tasksRepo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.tasks t
+      INNER JOIN module_b_projects.projects p ON p.id = t.project_id
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = t.project_id
+       AND pm.user_id = $2
+      WHERE t.id = $1
+        AND (
+          pm.id IS NOT NULL
+          OR p.created_by = $2
+          OR p.manager_id = $2
+          OR t.assignee_id = $2
+          OR t.created_by = $2
+        )
+      LIMIT 1
+      `,
+      [taskId, userId],
+    )) as Array<{ ok?: number }>;
+
+    return !!rows[0]?.ok;
   }
 
   private async resolveRhContextForUser(input: {

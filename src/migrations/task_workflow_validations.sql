@@ -4,13 +4,12 @@
 -- Create enum type for validation decision
 CREATE TYPE module_b_projects.validation_decision 
   AS ENUM ('approved', 'rejected', 'pending');
-
--- Create task_workflow_validations table
+ 
 CREATE TABLE module_b_projects.task_workflow_validations (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id         UUID NOT NULL REFERENCES module_b_projects.tasks(id) ON DELETE CASCADE,
   step_id         UUID NOT NULL REFERENCES module_b_projects.project_workflow_steps(id),
-  organization_id UUID NOT NULL,''
+  organization_id UUID NOT NULL,
   validator_id    UUID NOT NULL,
   decision        module_b_projects.validation_decision NOT NULL DEFAULT 'pending',
   comment         TEXT,
@@ -19,7 +18,6 @@ CREATE TABLE module_b_projects.task_workflow_validations (
   validated_at    TIMESTAMPTZ
 );
 
--- Create indexes for efficient lookups
 CREATE INDEX idx_twv_task_step 
   ON module_b_projects.task_workflow_validations(task_id, step_id);
 
@@ -30,24 +28,15 @@ CREATE INDEX idx_twv_decision
   ON module_b_projects.task_workflow_validations(decision) 
   WHERE decision = 'pending';
 
--- Insert missing permissions for workflow validation
--- Only adding validate.project and validate.global (others already exist)
 INSERT INTO core.permissions (id, code, system_module_code, resource, action, display_name, description, is_crud_action, created_at)
 VALUES 
   (gen_random_uuid(), 'projects.task.validate.project', 'module_b_projects', 'task', 'validate.project', 'Valider tâches projet', 'Permet de valider les étapes de workflow des tâches du projet', false, NOW()),
   (gen_random_uuid(), 'projects.task.validate.global', 'module_b_projects', 'task', 'validate.global', 'Valider toutes tâches', 'Permet de valider les étapes de workflow de toutes les tâches', false, NOW())
 ON CONFLICT (code) DO NOTHING;
-
--- Configure validation on workflow steps (activate validation on specific steps)
--- This enables the "Valider cette étape" button in the frontend
+ 
 UPDATE module_b_projects.project_workflow_steps
 SET requires_validation = true, validator_role = 'MANAGER'
 WHERE name ILIKE '%approved%' 
    OR name ILIKE '%validation%' 
    OR name ILIKE '%review%'
-   OR name ILIKE '%révision%';
-
--- Rollback (pour référence):
--- DROP TABLE IF EXISTS module_b_projects.task_workflow_validations;
--- DROP TYPE IF EXISTS module_b_projects.validation_decision;
--- DELETE FROM core.permissions WHERE code LIKE 'projects.task.validate.%';
+   OR name ILIKE '%révision%'; 

@@ -27,8 +27,8 @@ export class User {
   @Column({ type: 'varchar', length: 100, nullable: true })
   username!: string | null;
 
-  @Column({ type: 'varchar', length: 255, name: 'password_hash', select: false })
-  passwordHash!: string;
+  @Column({ type: 'varchar', length: 255, name: 'password_hash', nullable: true, select: false })
+  passwordHash!: string | null;
 
   @Column({ type: 'varchar', length: 255, name: 'password_salt', nullable: true, select: false })
   passwordSalt!: string | null;

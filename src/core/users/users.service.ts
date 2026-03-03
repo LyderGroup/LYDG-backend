@@ -157,7 +157,8 @@ export class UsersService {
       lastName: payload.lastName,
       phone: payload.phone ?? null,
       // Pas de mot de passe local pour le moment, gestion via Firebase / lien d'activation
-      passwordHash: '',
+      // On met null au lieu de string vide pour éviter les failles de connexion
+      passwordHash: null,
       passwordSalt: null,
       language: payload.language ?? 'fr',
       timezone: payload.timezone ?? null,
@@ -212,7 +213,14 @@ export class UsersService {
         savedUser.externalId = firebaseUser.uid;
       }
     } catch (err) {
-      console.error('[INVITE] Failed to generate/send reset link', err);
+      console.error('[INVITE] Failed to generate/send reset link', err); 
+      if (!savedUser.externalId) {
+        console.error(`[INVITE] User ${savedUser.id} created in DB but has no Firebase UID - will not be able to login`);
+      }
+    }
+ 
+    if (!savedUser.externalId) {
+      console.warn(`[INVITE] Warning: User ${savedUser.id} (${savedUser.email}) has no externalId - Firebase invitation may have failed`);
     }
 
     return savedUser;
@@ -242,8 +250,10 @@ export class UsersService {
       patch.timezone = input.timezone;
     }
     if (input.department !== undefined) {
-      // stocké dans metadata.department
-      patch.metadata = { ...(patch.metadata as any), department: input.department } as any;
+      // Récupérer le metadata existant en DB et merger
+      const existing = await this.usersRepo.findOne({ where: { id, organizationId } });
+      const existingMetadata = (existing?.metadata as Record<string, any>) ?? {};
+      patch.metadata = { ...existingMetadata, department: input.department } as any;
     }
     if (typeof input.isActive === 'boolean') {
       patch.isActive = input.isActive;

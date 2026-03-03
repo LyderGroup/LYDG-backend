@@ -6,17 +6,32 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository, type QueryDeepPartialEntity } from 'typeorm';
+import {
+  In,
+  Repository,
+  SelectQueryBuilder,
+  EntityManager,
+  DataSource,
+} from 'typeorm';
+import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Organization } from '../organizations/organizations.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { ProjectMember } from './project-member.entity';
 import { ProjectComment } from './project-comment.entity';
 import { Project } from './project.entity';
+import { ProjectWorkflow } from './project-workflow.entity';
+import { ProjectWorkflowStep } from './project-workflow-step.entity';
 import { Subtask } from './subtask.entity';
 import { TaskComment } from './task-comment.entity';
+import { TaskDependency } from './task-dependency.entity';
 import { Task } from './task.entity';
 import { TaskCommentsRealtimeService } from './task-comments.realtime';
 import { ProjectCommentsRealtimeService } from './project-comments.realtime';
+import { WorkflowValidationService } from './workflow-validation.service';
+import { InAppNotificationService } from '../notifications/in-app-notification.service';
+import { FcmService } from '../notifications/fcm.service';
+import { TaskDependencyService } from './task-dependency.service';
+import { TaskWorkflowValidation } from './task-workflow-validation.entity';
 
 export type ControlTowerBucket = 'overdue' | 'pending_validation' | 'in_progress' | 'completed';
 
@@ -30,6 +45,8 @@ export class ProjectsService {
   constructor(
     @InjectRepository(Task)
     private readonly tasksRepo: Repository<Task>,
+    @InjectRepository(TaskDependency)
+    private readonly taskDependenciesRepo: Repository<TaskDependency>,
     @InjectRepository(Subtask)
     private readonly subtasksRepo: Repository<Subtask>,
     @InjectRepository(TaskComment)
@@ -40,13 +57,73 @@ export class ProjectsService {
     private readonly projectsRepo: Repository<Project>, 
     @InjectRepository(ProjectMember)
     private readonly projectMembersRepo: Repository<ProjectMember>,
+    @InjectRepository(ProjectWorkflow)
+    private readonly projectWorkflowsRepo: Repository<ProjectWorkflow>,
+    @InjectRepository(ProjectWorkflowStep)
+    private readonly projectWorkflowStepsRepo: Repository<ProjectWorkflowStep>,
     @InjectRepository(UserRole)
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
+    @InjectRepository(TaskWorkflowValidation)
+    private readonly taskWorkflowValidationsRepo: Repository<TaskWorkflowValidation>,
     private readonly taskCommentsRealtime: TaskCommentsRealtimeService,
     private readonly projectCommentsRealtime: ProjectCommentsRealtimeService,
+    private readonly workflowValidationService: WorkflowValidationService,
+    private readonly inAppNotificationService: InAppNotificationService,
+    private readonly fcmService: FcmService,
+    private readonly taskDependencyService: TaskDependencyService,
+    private readonly dataSource: DataSource,
   ) {}
+
+  private async ensureDefaultWorkflowForProject(input: {
+    projectId: string;
+  }): Promise<{ workflowId: string; firstStepId: string }> {
+    const existing = await this.projectWorkflowsRepo.findOne({ where: { projectId: input.projectId } });
+    if (existing?.id) {
+      const first = await this.projectWorkflowStepsRepo.findOne({
+        where: { workflowId: existing.id, stepOrder: 0 },
+      });
+      if (first?.id) {
+        return { workflowId: existing.id, firstStepId: first.id };
+      }
+    }
+
+    const wf = await this.projectWorkflowsRepo.save(
+      this.projectWorkflowsRepo.create({
+        projectId: input.projectId,
+        name: 'Workflow par défaut',
+        isDefault: true,
+      }),
+    );
+
+    const steps = [
+      { name: 'Draft', stepOrder: 0, requiresValidation: false, validatorRole: null, isFinalStep: false },
+      { name: 'Review', stepOrder: 1, requiresValidation: false, validatorRole: null, isFinalStep: false },
+      { name: 'Approved', stepOrder: 2, requiresValidation: true, validatorRole: 'MANAGER_OR_OWNER', isFinalStep: false },
+      { name: 'Done', stepOrder: 3, requiresValidation: true, validatorRole: 'MANAGER_OR_OWNER', isFinalStep: true },
+    ];
+
+    const savedSteps = await this.projectWorkflowStepsRepo.save(
+      steps.map((s) =>
+        this.projectWorkflowStepsRepo.create({
+          workflowId: wf.id,
+          name: s.name,
+          stepOrder: s.stepOrder,
+          requiresValidation: s.requiresValidation,
+          validatorRole: s.validatorRole,
+          isFinalStep: s.isFinalStep,
+        }),
+      ),
+    );
+
+    const first = savedSteps.find((s) => s.stepOrder === 0) ?? savedSteps[0];
+    if (!first?.id) {
+      throw new InternalServerErrorException('Failed to create default workflow steps');
+    }
+
+    return { workflowId: wf.id, firstStepId: first.id };
+  }
 
   private async assertProjectReadableOrThrow(input: {
     projectId: string;
@@ -80,10 +157,7 @@ export class ProjectsService {
 
     const first = rows[0];
     if (first?.project_id) {
-      return {
-        projectId: String(first.project_id),
-        organizationId: String(first.organization_id),
-      };
+      return { projectId: String(rows[0]!.project_id), organizationId: String(rows[0]!.organization_id) };
     }
 
     const exists = (await this.projectsRepo.manager.query(
@@ -101,6 +175,35 @@ export class ProjectsService {
     }
 
     throw new ForbiddenException('Project not accessible');
+  }
+
+  private async assertUserIsOwnerOrManagerForProjectOrThrow(input: {
+    projectId: string;
+    userId: string;
+    contextOrganizationId: string;
+  }): Promise<void> {
+    const rows = (await this.projectsRepo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.projects p
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = p.id
+       AND pm.user_id = $2
+      WHERE p.id = $1
+        AND p.organization_id = $3
+        AND (
+          p.created_by = $2
+          OR p.manager_id = $2
+          OR COALESCE(pm.role_in_project,'') IN ('OWNER','MANAGER')
+        )
+      LIMIT 1
+      `,
+      [input.projectId, input.userId, input.contextOrganizationId],
+    )) as Array<{ ok?: number }>;
+
+    if (!rows?.[0]?.ok) {
+      throw new ForbiddenException('Validation requise: OWNER ou MANAGER');
+    }
   }
 
   async listProjectComments(input: {
@@ -196,8 +299,57 @@ export class ProjectsService {
       projectId: saved.projectId,
       payload,
     });
+ 
+    this.sendProjectCommentNotifications(saved.projectId, input.userId, authorName, content, input.contextOrganizationId)
+      .catch(err => console.error('[ProjectsService] Error sending project comment notifications:', err));
 
     return payload;
+  }
+
+  private async sendProjectCommentNotifications(
+    projectId: string,
+    authorId: string,
+    authorName: string | null,
+    content: string,
+    organizationId: string,
+  ) {
+    const project = await this.projectsRepo.findOne({
+      where: { id: projectId },
+    });
+
+    if (!project) return;
+ 
+    const members = await this.projectMembersRepo.find({
+      where: { projectId },
+      select: ['userId'],
+    });
+
+    const recipientIds = new Set<string>(
+      members
+        .map(m => m.userId)
+        .filter(id => id !== authorId)
+    );
+
+    const title = `Nouveau message sur le projet: ${project.name}`;
+    const body = `${authorName || 'Quelqu\'un'} a dit : ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`;
+
+    for (const recipientId of recipientIds) {
+      // In-App
+      await this.inAppNotificationService.create({
+        userId: recipientId,
+        organizationId,
+        title,
+        message: body,
+        type: 'project_comment',
+        data: { projectId, authorId },
+      }).catch(() => {});
+
+      // FCM (Push)
+      await this.fcmService.sendToUser(recipientId, title, body, {
+        type: 'project_comment',
+        projectId,
+      }).catch(() => {});
+    }
   }
 
   private async recalcProjectProgressFromTasks(input: {
@@ -228,161 +380,402 @@ export class ProjectsService {
     return progress;
   }
 
-  async createProject(input: {
-    contextOrganizationId: string;
+  async listTaskDependencies(input: {
+    taskId: string;
     userId: string;
+    contextOrganizationId: string;
     permissionCodes: string[];
-    dto: {
-      departmentId: string;
-      name: string;
-      code: string;
-      description?: string | null;
-      managerId?: string | null;
-      memberIds?: string[];
-    };
   }) {
-    if (!input.dto.departmentId || !String(input.dto.departmentId).trim()) {
-      throw new BadRequestException('departmentId is required');
-    }
-    if (!input.dto.name || !input.dto.name.trim()) {
-      throw new BadRequestException('name is required');
-    }
-    if (!input.dto.code || !input.dto.code.trim()) {
-      throw new BadRequestException('code is required');
+    const task = await this.tasksRepo.findOne({
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
     }
 
-    const departmentId = String(input.dto.departmentId);
-
-    let hasRhDepartment = false;
-    try {
-      const rows = (await this.projectsRepo.manager.query(
-        `
-        SELECT d.id AS id
-        FROM module_c_rh.departments d
-        WHERE d.id = $1 AND d.organization_id = $2
-        LIMIT 1
-        `,
-        [departmentId, input.contextOrganizationId],
-      )) as Array<{ id?: string }>;
-
-      hasRhDepartment = !!rows[0]?.id;
-    } catch {
-      hasRhDepartment = false;
-    }
-
-    if (!hasRhDepartment) {
-      const coreRows = (await this.projectsRepo.manager.query(
-        `
-        SELECT d.id AS id, d.name AS name, d.code AS code
-        FROM core.departments d
-        WHERE d.id = $1 AND d.organization_id = $2
-        LIMIT 1
-        `,
-        [departmentId, input.contextOrganizationId],
-      )) as Array<{ id?: string; name?: string; code?: string }>;
-
-      const coreDept = coreRows[0];
-      if (!coreDept?.id) {
-        throw new BadRequestException('Invalid departmentId');
-      }
-
-      try {
-        await this.projectsRepo.manager.query(
-          `
-          INSERT INTO module_c_rh.departments (
-            id,
-            organization_id,
-            parent_department_id,
-            name,
-            code,
-            description,
-            manager_id,
-            location,
-            cost_center,
-            is_active
-          )
-          VALUES ($1,$2,NULL,$3,$4,NULL,NULL,NULL,NULL,true)
-          ON CONFLICT (id) DO NOTHING
-          `,
-          [departmentId, input.contextOrganizationId, String(coreDept.name ?? ''), String(coreDept.code ?? '')],
-        );
- 
-        const verify = (await this.projectsRepo.manager.query(
-          `
-          SELECT d.id AS id
-          FROM module_c_rh.departments d
-          WHERE d.id = $1 AND d.organization_id = $2
-          LIMIT 1
-          `,
-          [departmentId, input.contextOrganizationId],
-        )) as Array<{ id?: string }>;
-
-        if (!verify[0]?.id) {
-          throw new BadRequestException('Invalid departmentId');
-        }
-      } catch (err: any) {
-        const msg = String(err?.message ?? err);
-
-        if (msg.toLowerCase().includes('does not exist') && msg.toLowerCase().includes('module_c_rh')) {
-          throw new BadRequestException(
-            'Module RH manquant: impossible de créer un projet sans module_c_rh.departments. Exécute database/modules/module_c_rh.sql puis réessaie.',
-          );
-        }
- 
-        throw new BadRequestException(
-          "Impossible de synchroniser le département dans RH (conflit code ou contrainte). Vérifie que core.departments et module_c_rh.departments sont alignés.",
-        );
-      }
-    }
-
-    const managerId = input.dto.managerId ?? null;
-
-    const project = this.projectsRepo.create({
-      organizationId: input.contextOrganizationId,
-      departmentId,
-      name: input.dto.name.trim(),
-      code: input.dto.code.trim(),
-      description: input.dto.description ?? null,
-      managerId,
-      createdBy: input.userId,
+    await this.assertTaskReadableOrThrow({
+      taskId: task.id,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
     });
 
-    const saved = await this.projectsRepo.save(project);
+    const deps = await this.taskDependenciesRepo.find({
+      where: { taskId: task.id },
+      order: { createdAt: 'ASC' },
+    });
 
-    const rawMemberIds = Array.isArray(input.dto.memberIds) ? input.dto.memberIds : [];
-    const memberIds = rawMemberIds.map((x) => String(x)).filter(Boolean);
+    return deps.map((d) => ({
+      id: d.id,
+      taskId: d.taskId,
+      dependsOnTaskId: d.dependsOnTaskId,
+      dependencyType: d.dependencyType,
+      lagDays: d.lagDays,
+      createdAt: d.createdAt,
+    }));
+  }
 
-    const uniqueUserIds = new Set<string>(memberIds);
-    if (managerId) uniqueUserIds.add(managerId);
-    uniqueUserIds.add(input.userId);
-
-    for (const userId of uniqueUserIds) {
-      await this.projectMembersRepo.save(
-        this.projectMembersRepo.create({
-          projectId: saved.id,
-          userId,
-          roleInProject:
-            managerId && userId === managerId
-              ? 'MANAGER'
-              : userId === input.userId
-                ? 'OWNER'
-                : 'MEMBER',
-          addedBy: input.userId,
-        }),
-      );
+  async addTaskDependency(input: {
+    taskId: string;
+    dependsOnTaskId: string;
+    dependencyType?: string;
+    lagDays?: number;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    if (!input.dependsOnTaskId || !String(input.dependsOnTaskId).trim()) {
+      throw new BadRequestException('dependsOnTaskId is required');
     }
+
+    const task = await this.tasksRepo.findOne({
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+
+    await this.assertTaskReadableOrThrow({
+      taskId: task.id,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
+    });
+
+    const writeScope = this.resolveTaskWriteScope(input.permissionCodes);
+    if (writeScope === 'project') {
+      await this.assertUserIsProjectManagerOrThrow({
+        userId: input.userId,
+        contextOrganizationId: input.contextOrganizationId,
+        projectId: task.projectId,
+      });
+    } else if (writeScope === 'own') {
+      const owns = task.assigneeId === input.userId || task.createdBy === input.userId;
+      if (!owns) {
+        throw new ForbiddenException('Task not writable');
+      }
+    }
+
+    if (task.id === input.dependsOnTaskId) {
+      throw new BadRequestException('Task cannot depend on itself');
+    }
+
+    const dependsOnTask = await this.tasksRepo.findOne({
+      where: { id: input.dependsOnTaskId, organizationId: input.contextOrganizationId },
+    });
+    if (!dependsOnTask) {
+      throw new BadRequestException('dependsOnTaskId not found');
+    }
+    if (dependsOnTask.projectId !== task.projectId) {
+      throw new BadRequestException('Dependencies must be within the same project');
+    }
+
+    await this.assertNoCircularTaskDependencyOrThrow({
+      taskId: task.id,
+      dependsOnTaskId: dependsOnTask.id,
+      contextOrganizationId: input.contextOrganizationId,
+    });
+
+    const dependencyType = input.dependencyType ? String(input.dependencyType) : 'finish_to_start';
+    const lagDays = Number.isFinite(input.lagDays as number) ? Number(input.lagDays) : 0;
+
+    const existing = await this.taskDependenciesRepo.findOne({
+      where: { taskId: task.id, dependsOnTaskId: dependsOnTask.id, dependencyType },
+    });
+    if (existing) {
+      return {
+        id: existing.id,
+        taskId: existing.taskId,
+        dependsOnTaskId: existing.dependsOnTaskId,
+        dependencyType: existing.dependencyType,
+        lagDays: existing.lagDays,
+        createdAt: existing.createdAt,
+      };
+    }
+
+    const saved = await this.taskDependenciesRepo.save(
+      this.taskDependenciesRepo.create({
+        taskId: task.id,
+        dependsOnTaskId: dependsOnTask.id,
+        dependencyType,
+        lagDays,
+      }),
+    );
 
     return {
       id: saved.id,
-      organizationId: saved.organizationId,
-      departmentId: saved.departmentId,
-      name: saved.name,
-      code: saved.code,
-      description: saved.description,
-      managerId: saved.managerId,
-      createdBy: saved.createdBy,
+      taskId: saved.taskId,
+      dependsOnTaskId: saved.dependsOnTaskId,
+      dependencyType: saved.dependencyType,
+      lagDays: saved.lagDays,
       createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
+    };
+  }
+
+  async removeTaskDependency(input: {
+    taskId: string;
+    dependsOnTaskId: string;
+    dependencyType?: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    const task = await this.tasksRepo.findOne({
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+
+    await this.assertTaskReadableOrThrow({
+      taskId: task.id,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
+    });
+
+    const writeScope = this.resolveTaskWriteScope(input.permissionCodes);
+    if (writeScope === 'project') {
+      await this.assertUserIsProjectManagerOrThrow({
+        userId: input.userId,
+        contextOrganizationId: input.contextOrganizationId,
+        projectId: task.projectId,
+      });
+    } else if (writeScope === 'own') {
+      const owns = task.assigneeId === input.userId || task.createdBy === input.userId;
+      if (!owns) {
+        throw new ForbiddenException('Task not writable');
+      }
+    }
+
+    const dependencyType = input.dependencyType ? String(input.dependencyType) : undefined;
+
+    if (dependencyType) {
+      await this.taskDependenciesRepo.delete({
+        taskId: task.id,
+        dependsOnTaskId: input.dependsOnTaskId,
+        dependencyType,
+      });
+    } else {
+      await this.taskDependenciesRepo.delete({
+        taskId: task.id,
+        dependsOnTaskId: input.dependsOnTaskId,
+      });
+    }
+
+    return { deleted: true };
+  }
+
+  private async assertNoCircularTaskDependencyOrThrow(input: {
+    taskId: string;
+    dependsOnTaskId: string;
+    contextOrganizationId: string;
+  }) {
+    const rows = (await this.tasksRepo.manager.query(
+      `
+      WITH RECURSIVE dep_path AS (
+        SELECT td.task_id, td.depends_on_task_id
+        FROM module_b_projects.task_dependencies td
+        INNER JOIN module_b_projects.tasks t ON t.id = td.task_id
+        WHERE t.organization_id = $1
+          AND td.task_id = $2
+
+        UNION ALL
+
+        SELECT td2.task_id, td2.depends_on_task_id
+        FROM module_b_projects.task_dependencies td2
+        INNER JOIN dep_path p ON p.depends_on_task_id = td2.task_id
+        INNER JOIN module_b_projects.tasks t2 ON t2.id = td2.task_id
+        WHERE t2.organization_id = $1
+      )
+      SELECT 1 AS ok
+      FROM dep_path
+      WHERE depends_on_task_id = $3
+      LIMIT 1
+      `,
+      [input.contextOrganizationId, input.dependsOnTaskId, input.taskId],
+    )) as Array<{ ok?: number }>;
+
+    if (rows?.[0]?.ok) {
+      throw new BadRequestException('Circular dependency detected');
+    }
+  }
+
+  private async assertTaskDependenciesResolvedOrThrow(input: {
+    taskId: string;
+    contextOrganizationId: string;
+  }) {
+    const blockers = (await this.tasksRepo.manager.query(
+      `
+      SELECT d.depends_on_task_id AS "dependsOnTaskId",
+             t.status AS "status",
+             s.is_final_step AS "isFinalStep"
+      FROM module_b_projects.task_dependencies d
+      INNER JOIN module_b_projects.tasks t ON t.id = d.depends_on_task_id
+      LEFT JOIN module_b_projects.project_workflow_steps s ON s.id = t.current_step_id
+      WHERE d.task_id = $1
+        AND t.organization_id = $2
+        AND (COALESCE(s.is_final_step, false) = false)
+        AND (t.status IS NULL OR t.status <> 'completed')
+      LIMIT 20
+      `,
+      [input.taskId, input.contextOrganizationId],
+    )) as Array<{ dependsOnTaskId?: string }>;
+
+    if (blockers.length > 0) {
+      throw new BadRequestException('Task has unresolved dependencies');
+    }
+  }
+
+  async moveTaskToNextWorkflowStep(input: {
+    taskId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    const task = await this.tasksRepo.findOne({
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
+    });
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+
+    await this.assertTaskReadableOrThrow({
+      taskId: task.id,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
+    });
+
+    if (!task.workflowId || !task.currentStepId) {
+      const wf = await this.ensureDefaultWorkflowForProject({ projectId: task.projectId });
+      task.workflowId = wf.workflowId;
+      task.currentStepId = wf.firstStepId;
+      await this.tasksRepo.update(
+        { id: task.id, organizationId: input.contextOrganizationId },
+        { workflowId: task.workflowId, currentStepId: task.currentStepId } as QueryDeepPartialEntity<Task>,
+      );
+    }
+
+    const current = await this.projectWorkflowStepsRepo.findOne({ where: { id: task.currentStepId } });
+    if (!current) {
+      throw new BadRequestException('Invalid current workflow step');
+    }
+
+    // NEW: Check workflow validation before transition
+    // If current step requires validation, ensure an approved validation exists
+    await this.workflowValidationService.assertCanTransition(
+      {
+        userId: input.userId,
+        organizationId: input.contextOrganizationId,
+        userPermissions: input.permissionCodes,
+      },
+      task.id,
+    );
+
+    const next = await this.projectWorkflowStepsRepo.findOne({
+      where: { workflowId: task.workflowId!, stepOrder: current.stepOrder + 1 },
+    });
+    if (!next) {
+      throw new BadRequestException('No next workflow step (already final)');
+    }
+
+    // NEW: Check dependencies are satisfied before ANY transition (not just final step)
+    await this.taskDependencyService.assertDependenciesSatisfied(
+      task.id,
+      input.contextOrganizationId,
+    );
+ 
+    let statusPatch: string | undefined;
+    const stepName = String(next.name ?? '').toLowerCase();
+    if (next.isFinalStep || stepName === 'done') statusPatch = 'completed';
+    else if (stepName === 'approved') statusPatch = 'approved';
+    else if (stepName === 'review' || stepName.includes('review')) statusPatch = 'review';
+    else if (stepName === 'draft') statusPatch = 'todo';
+
+    await this.tasksRepo.update(
+      { id: task.id, organizationId: input.contextOrganizationId },
+      {
+        currentStepId: next.id,
+        ...(statusPatch ? { status: statusPatch } : {}),
+      } as QueryDeepPartialEntity<Task>,
+    );
+
+    return {
+      taskId: task.id,
+      workflowId: task.workflowId,
+      fromStepId: current.id,
+      toStepId: next.id,
+      toStepName: next.name,
+      isFinalStep: next.isFinalStep,
+      status: statusPatch ?? task.status,
+    };
+  }
+
+  async getTaskWorkflowState(input: {
+    taskId: string;
+    userId: string;
+    contextOrganizationId: string;
+    permissionCodes: string[];
+  }) {
+    let task = await this.tasksRepo.findOne({
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
+    });
+    if (!task) {
+      const anyOrg = await this.tasksRepo.findOne({ where: { id: input.taskId } });
+      if (anyOrg?.id) {
+        throw new ForbiddenException('Task not accessible in this tenant');
+      }
+      throw new NotFoundException('Task not found');
+    }
+
+    await this.assertTaskReadableOrThrow({
+      taskId: task.id,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+      permissionCodes: input.permissionCodes,
+    });
+
+    if (!task.workflowId || !task.currentStepId) {
+      const wf = await this.ensureDefaultWorkflowForProject({ projectId: task.projectId });
+      task.workflowId = wf.workflowId;
+      task.currentStepId = wf.firstStepId;
+      await this.tasksRepo.update(
+        { id: task.id, organizationId: input.contextOrganizationId },
+        { workflowId: task.workflowId, currentStepId: task.currentStepId } as QueryDeepPartialEntity<Task>,
+      );
+    }
+
+    const current = await this.projectWorkflowStepsRepo.findOne({ where: { id: task.currentStepId! } });
+    const steps = await this.projectWorkflowStepsRepo.find({
+      where: { workflowId: task.workflowId! },
+      order: { stepOrder: 'ASC' },
+      take: 100,
+    });
+
+    return {
+      taskId: task.id,
+      projectId: task.projectId,
+      workflowId: task.workflowId,
+      currentStepId: task.currentStepId,
+      currentStep: current
+        ? {
+            id: current.id,
+            name: current.name,
+            stepOrder: current.stepOrder,
+            requiresValidation: current.requiresValidation,
+            validatorRole: current.validatorRole,
+            isFinalStep: current.isFinalStep,
+          }
+        : null,
+      steps: steps.map((s) => ({
+        id: s.id,
+        name: s.name,
+        stepOrder: s.stepOrder,
+        requiresValidation: s.requiresValidation,
+        validatorRole: s.validatorRole,
+        isFinalStep: s.isFinalStep,
+      })),
     };
   }
 
@@ -613,58 +1006,88 @@ export class ProjectsService {
 
     const saved = await this.projectsRepo.save(project);
 
-    // Link organizations
-    for (const orgId of orgIds) {
-      await this.projectsRepo.manager.query(
-        `
-        INSERT INTO module_b_projects.project_organizations (project_id, organization_id, org_role)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (project_id, organization_id) DO NOTHING
-        `,
-        [saved.id, orgId, orgId === primaryOrgId ? 'OWNER' : 'PARTICIPANT'],
+    try {
+      await this.ensureDefaultWorkflowForProject({ projectId: saved.id });
+    } catch (e: any) {
+      console.error('[createProjectV2] Workflow init failed:', e);
+      const msg = String(e?.message ?? e ?? '').trim();
+      throw new InternalServerErrorException(
+        `Project created but workflow initialization failed. ${msg}`,
       );
+    }
+
+    // Link organizations
+    try {
+      for (const orgId of orgIds) {
+        await this.projectsRepo.manager.query(
+          `
+          INSERT INTO module_b_projects.project_organizations (project_id, organization_id, org_role)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (project_id, organization_id) DO NOTHING
+          `,
+          [saved.id, orgId, orgId === primaryOrgId ? 'OWNER' : 'PARTICIPANT'],
+        );
+      }
+    } catch (e: any) {
+      console.error('[createProjectV2] Link organizations failed:', e);
     }
 
     // Link departments
-    for (const d of deptPairs) {
-      await this.projectsRepo.manager.query(
-        `
-        INSERT INTO module_b_projects.project_departments (project_id, organization_id, department_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (project_id, organization_id, department_id) DO NOTHING
-        `,
-        [saved.id, d.organizationId, d.departmentId],
-      );
+    try {
+      for (const d of deptPairs) {
+        await this.projectsRepo.manager.query(
+          `
+          INSERT INTO module_b_projects.project_departments (project_id, organization_id, department_id)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (project_id, organization_id, department_id) DO NOTHING
+          `,
+          [saved.id, d.organizationId, d.departmentId],
+        );
+      }
+    } catch (e: any) {
+      console.error('[createProjectV2] Link departments failed:', e);
     }
 
     // Link managers
-    for (const managerId of managerIds) {
-      await this.projectsRepo.manager.query(
-        `
-        INSERT INTO module_b_projects.project_managers (project_id, user_id, manager_role, added_by)
-        VALUES ($1, $2, 'LEAD', $3)
-        ON CONFLICT (project_id, user_id) DO NOTHING
-        `,
-        [saved.id, managerId, input.userId],
-      );
+    try {
+      for (const managerId of managerIds) {
+        await this.projectsRepo.manager.query(
+          `
+          INSERT INTO module_b_projects.project_managers (project_id, user_id, manager_role, added_by)
+          VALUES ($1, $2, 'LEAD', $3)
+          ON CONFLICT (project_id, user_id) DO NOTHING
+          `,
+          [saved.id, managerId, input.userId],
+        );
+      }
+    } catch (e: any) {
+      console.error('[createProjectV2] Link managers failed:', e);
     }
 
-    // Project members (for task RBAC + legacy membership)
-    const allMemberIds = this.uniqueStrings([...memberIds, ...managerIds, input.userId]);
-    for (const userId of allMemberIds) {
-      await this.projectMembersRepo.save(
-        this.projectMembersRepo.create({
-          projectId: saved.id,
-          userId,
-          roleInProject: managerIds.includes(userId)
-            ? 'MANAGER'
-            : userId === input.userId
-              ? 'OWNER'
-              : 'MEMBER',
-          addedBy: input.userId,
-        }),
-      );
+    // Project members
+    try {
+      const allMemberIds = this.uniqueStrings([...memberIds, ...managerIds, input.userId]);
+      for (const userId of allMemberIds) {
+        await this.projectMembersRepo.save(
+          this.projectMembersRepo.create({
+            projectId: saved.id,
+            userId,
+            roleInProject: managerIds.includes(userId)
+              ? 'MANAGER'
+              : userId === input.userId
+                ? 'OWNER'
+                : 'MEMBER',
+            addedBy: input.userId,
+          }),
+        );
+      }
+    } catch (e: any) {
+      console.error('[createProjectV2] Project members failed:', e);
     }
+
+    // Envoyer des notifications de création de projet aux membres
+    this.sendProjectCreatedNotifications(saved.id, input.userId, saved.name, input.contextOrganizationId)
+      .catch(err => console.error('[ProjectsService] Error sending project created notifications:', err));
 
     return {
       id: saved.id,
@@ -678,6 +1101,44 @@ export class ProjectsService {
       createdAt: saved.createdAt,
       updatedAt: saved.updatedAt,
     };
+  }
+
+  private async sendProjectCreatedNotifications(
+    projectId: string,
+    creatorId: string,
+    projectName: string,
+    organizationId: string,
+  ) {
+    // Récupérer tous les membres du projet sauf le créateur
+    const members = await this.projectMembersRepo.find({
+      where: { projectId },
+      select: ['userId'],
+    });
+
+    const recipientIds = members
+      .map(m => m.userId)
+      .filter(id => id !== creatorId);
+
+    const title = `Nouveau projet créé: ${projectName}`;
+    const body = `Vous avez été ajouté au projet "${projectName}". Cliquez pour voir les détails.`;
+
+    for (const recipientId of recipientIds) {
+      // In-App
+      await this.inAppNotificationService.create({
+        userId: recipientId,
+        organizationId,
+        title,
+        message: body,
+        type: 'project_created',
+        data: { projectId, creatorId },
+      }).catch(() => {});
+
+      // FCM (Push)
+      await this.fcmService.sendToUser(recipientId, title, body, {
+        type: 'project_created',
+        projectId,
+      }).catch(() => {});
+    }
   }
 
   private async resolveAccessibleOrganizationIdsForUser(userId: string): Promise<string[]> {
@@ -791,6 +1252,7 @@ export class ProjectsService {
     });
 
     const isAssignee = !!task.assigneeId && task.assigneeId === input.userId;
+    const isCreator = !!(task as any)?.createdBy && String((task as any).createdBy) === input.userId;
     const permSet = new Set((input.permissionCodes ?? []).filter(Boolean));
     const hasElevatedWrite =
       permSet.has('projects.task.write.global') ||
@@ -825,7 +1287,7 @@ export class ProjectsService {
       }
     }
 
-    if (!hasElevatedWrite) {
+    if (!hasElevatedWrite && !isAssignee && !isCreator) {
       await this.assertUserIsProjectMemberOrThrow({
         userId: input.userId,
         contextOrganizationId: input.contextOrganizationId,
@@ -1185,7 +1647,53 @@ export class ProjectsService {
       payload,
     });
 
+    // Envoyer des notifications aux personnes concernées (assigné, créateur, manager)
+    this.sendTaskCommentNotifications(saved.taskId, input.userId, authorName, content, input.contextOrganizationId)
+      .catch(err => console.error('[ProjectsService] Error sending task comment notifications:', err));
+
     return payload;
+  }
+
+  private async sendTaskCommentNotifications(
+    taskId: string,
+    authorId: string,
+    authorName: string | null,
+    content: string,
+    organizationId: string,
+  ) {
+    const task = await this.tasksRepo.findOne({
+      where: { id: taskId },
+      relations: ['project'],
+    });
+
+    if (!task) return;
+
+    const recipientIds = new Set<string>();
+    if (task.assigneeId && task.assigneeId !== authorId) recipientIds.add(task.assigneeId);
+    if (task.createdBy && task.createdBy !== authorId) recipientIds.add(task.createdBy);
+    if (task.project?.managerId && task.project.managerId !== authorId) recipientIds.add(task.project.managerId);
+    if (task.project?.createdBy && task.project.createdBy !== authorId) recipientIds.add(task.project.createdBy);
+
+    const title = `Nouveau message sur la tâche: ${task.title}`;
+    const body = `${authorName || 'Quelqu\'un'} a dit : ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`;
+
+    for (const recipientId of recipientIds) {
+      // In-App
+      await this.inAppNotificationService.create({
+        userId: recipientId,
+        organizationId,
+        title,
+        message: body,
+        type: 'task_comment',
+        data: { taskId, authorId },
+      }).catch(() => {});
+
+      // FCM (Push)
+      await this.fcmService.sendToUser(recipientId, title, body, {
+        type: 'task_comment',
+        taskId,
+      }).catch(() => {});
+    }
   }
 
   private async assertTaskReadableOrThrow(input: {
@@ -1202,10 +1710,31 @@ export class ProjectsService {
       .leftJoinAndSelect('t.assignee', 'a')
       .where('t.id = :id', { id: input.taskId });
 
-    if (readScope === 'own') {
-      qb.andWhere('(t.assignee_id = :userId OR t.created_by = :userId)', {
-        userId: input.userId,
-      });
+    const hasExplicitReadPermission = input.permissionCodes.some(p => p.startsWith('projects.task.read'));
+    
+    if (!hasExplicitReadPermission) {
+      // Permettre à l'assignee d'accéder à sa tâche
+      qb.andWhere(
+        `(
+          t.assignee_id = :userId
+          OR t.created_by = :userId
+          OR p.created_by = :userId
+          OR p.manager_id = :userId
+        )`,
+        { userId: input.userId },
+      );
+    } else if (readScope === 'own') {
+      qb.andWhere(
+        `(
+          t.assignee_id = :userId
+          OR t.created_by = :userId
+          OR p.created_by = :userId
+          OR p.manager_id = :userId
+        )`,
+        {
+          userId: input.userId,
+        },
+      );
     } else if (readScope === 'project') {
       qb.andWhere(
         `t.project_id IN (
@@ -1424,6 +1953,10 @@ export class ProjectsService {
       createdBy: input.userId,
     });
 
+    const wf = await this.ensureDefaultWorkflowForProject({ projectId: project.id });
+    task.workflowId = wf.workflowId;
+    task.currentStepId = wf.firstStepId;
+
     const saved = await this.tasksRepo.save(task);
 
     await this.recalcProjectProgressFromTasks({
@@ -1495,6 +2028,14 @@ export class ProjectsService {
         contextOrganizationId: input.contextOrganizationId,
         permissionCodes: [`projects.task.read.${writeScope}`],
       });
+    }
+
+    // NEW: If changing status to in_progress or beyond, check dependencies are satisfied
+    if (input.dto.status && input.dto.status !== 'todo' && input.dto.status !== 'pending') {
+      await this.taskDependencyService.assertDependenciesSatisfied(
+        input.id,
+        input.contextOrganizationId,
+      );
     }
 
     const patch: QueryDeepPartialEntity<Task> = {};

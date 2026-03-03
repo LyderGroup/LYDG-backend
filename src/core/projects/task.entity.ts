@@ -4,12 +4,15 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Organization } from '../organizations/organizations.entity';
 import { User } from '../users/user.entity';
 import { Project } from './project.entity';
+import { ProjectWorkflowStep } from './project-workflow-step.entity';
+import { TaskWorkflowValidation } from './task-workflow-validation.entity';
 
 @Entity({ schema: 'module_b_projects', name: 'tasks' })
 export class Task {
@@ -80,6 +83,19 @@ export class Task {
 
   @Column({ type: 'uuid', name: 'created_by', nullable: true })
   createdBy!: string | null;
+
+  @Column({ type: 'uuid', name: 'workflow_id', nullable: true })
+  workflowId!: string | null;
+
+  @Column({ type: 'uuid', name: 'current_step_id', nullable: true })
+  currentStepId!: string | null;
+
+  @ManyToOne(() => ProjectWorkflowStep, { nullable: true })
+  @JoinColumn({ name: 'current_step_id' })
+  currentStep?: ProjectWorkflowStep | null;
+
+  @OneToMany(() => TaskWorkflowValidation, (v) => v.task)
+  validations?: TaskWorkflowValidation[];
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
   createdAt!: Date;

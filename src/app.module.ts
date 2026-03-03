@@ -42,13 +42,11 @@ import { ProjectsModule } from './core/projects/projects.module';
             const parsed = new URL(databaseUrl);
             const normalized = new URL(databaseUrl);
             normalized.hostname = normalized.hostname.toLowerCase();
-            const normalizedDatabaseUrl = normalized.toString();
-            // eslint-disable-next-line no-console
+            const normalizedDatabaseUrl = normalized.toString(); 
             console.log(
               `[db] Using DATABASE_URL host=${normalized.hostname} port=${normalized.port || '5432'} db=${normalized.pathname?.replace('/', '') || ''} ssl=${useSsl}`,
             );
-          } catch {
-            // eslint-disable-next-line no-console
+          } catch { 
             console.log(`[db] Using DATABASE_URL (unparseable) ssl=${useSsl}`);
           }
 
@@ -77,8 +75,7 @@ import { ProjectsModule } from './core/projects/projects.module';
         const database =
           configService.get<string>('DB_NAME') ||
           configService.get<string>('PGDATABASE') ||
-          'lydg';
-        // eslint-disable-next-line no-console
+          'lydg'; 
         console.log(`[db] Using params host=${host} port=${portRaw} db=${database} ssl=${useSsl}`);
 
         return {

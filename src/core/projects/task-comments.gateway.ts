@@ -7,6 +7,9 @@ import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Organization } from '../organizations/organizations.entity';
 import { User } from '../users/user.entity';
+import { RbacService } from '../rbac/rbac.service';
+import { Role } from '../rbac/role.entity';
+import { UserRole } from '../rbac/user-role.entity';
 
 type AuthedSocket = Socket & {
   data: {
@@ -25,10 +28,15 @@ export class TaskCommentsGateway {
 
   constructor(
     private readonly configService: ConfigService,
+    private readonly rbacService: RbacService,
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
+    @InjectRepository(Role)
+    private readonly rolesRepo: Repository<Role>,
+    @InjectRepository(UserRole)
+    private readonly userRolesRepo: Repository<UserRole>,
   ) {}
 
   private ensureFirebaseInit(): void {
@@ -112,6 +120,31 @@ export class TaskCommentsGateway {
     if (!userId || !organizationId) return { ok: false, reason: 'unauthorized' };
     if (!taskId) return { ok: false, reason: 'missing taskId' };
 
+    // Vérifier d'abord les permissions RBAC globales (system role = accès total)
+    const hasSystemRole = await this.rbacService.userHasAnySystemRole(userId, organizationId);
+    if (hasSystemRole) {
+      await client.join(this.getTaskRoom({ organizationId, taskId }));
+      return { ok: true };
+    }
+
+    // Vérifier les permissions de rôle (tenant/global)
+    const hasTenantRead = await this.userHasPermission(userId, organizationId, 'projects.task.read.tenant');
+    const hasGlobalRead = await this.userHasPermission(userId, organizationId, 'projects.task.read.global');
+    
+    if (hasTenantRead || hasGlobalRead) {
+      // Vérifier que la tâche appartient bien à l'organisation
+      const taskExists = await this.organizationsRepo.manager.query(
+        `SELECT 1 AS ok FROM module_b_projects.tasks WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+        [taskId, organizationId],
+      );
+      if (taskExists[0]?.ok) {
+        await client.join(this.getTaskRoom({ organizationId, taskId }));
+        return { ok: true };
+      }
+      return { ok: false, reason: 'not_found' };
+    }
+
+    // Vérification standard : membre du projet, manager, créateur, ou assigné
     const ok = (await this.organizationsRepo.manager.query(
       `
       SELECT 1 AS ok
@@ -125,6 +158,7 @@ export class TaskCommentsGateway {
         AND p.organization_id = $3
         AND (
           pm.id IS NOT NULL
+          OR p.created_by = $2
           OR p.manager_id = $2
           OR t.assignee_id = $2
           OR t.created_by = $2
@@ -140,6 +174,30 @@ export class TaskCommentsGateway {
 
     await client.join(this.getTaskRoom({ organizationId, taskId }));
     return { ok: true };
+  }
+
+  /**
+   * Vérifie si un utilisateur a une permission spécifique via son rôle.
+   */
+  private async userHasPermission(
+    userId: string,
+    organizationId: string,
+    permissionCode: string,
+  ): Promise<boolean> {
+    const result = await this.userRolesRepo
+      .createQueryBuilder('ur')
+      .innerJoin('ur.role', 'r')
+      .innerJoin('r.permissions', 'p')
+      .where('ur.userId = :userId', { userId })
+      .andWhere('ur.isActive = true')
+      .andWhere('(ur.expiresAt IS NULL OR ur.expiresAt > NOW())')
+      .andWhere('r.isActive = true')
+      .andWhere('p.code = :permissionCode', { permissionCode })
+      .andWhere('(r.organizationId = :orgId OR r.isSystemRole = true)', { orgId: organizationId })
+      .limit(1)
+      .getOne();
+
+    return !!result;
   }
 
   @SubscribeMessage('task.leave')

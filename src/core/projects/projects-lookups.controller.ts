@@ -101,6 +101,106 @@ export class ProjectsLookupsController {
     return str;
   }
 
+  @Get('projects/:projectId/workflow')
+  async getProjectWorkflow(@Req() req: any, @Param('projectId') projectId: string) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+
+    const access = (await this.dataSource.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.projects p
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = p.id
+       AND pm.user_id = $2
+      WHERE p.id = $1
+        AND p.organization_id = $3
+        AND (pm.user_id IS NOT NULL OR p.created_by = $2 OR p.manager_id = $2)
+      LIMIT 1
+      `,
+      [projectId.trim(), String(currentUser.id), String(tenant.id)],
+    )) as Array<{ ok?: number }>;
+
+    if (!access?.[0]?.ok) {
+      const exists = (await this.dataSource.query(
+        `
+        SELECT 1 AS ok
+        FROM module_b_projects.projects p
+        WHERE p.id = $1
+          AND p.organization_id = $2
+        LIMIT 1
+        `,
+        [projectId.trim(), String(tenant.id)],
+      )) as Array<{ ok?: number }>;
+
+      if (exists?.[0]?.ok) {
+        throw new ForbiddenException('Missing required permission');
+      }
+      throw new BadRequestException('Project not found');
+    }
+
+    const workflows = (await this.dataSource.query(
+      `
+      SELECT w.id, w.project_id AS "projectId", w.name, w.is_default AS "isDefault", w.created_at AS "createdAt", w.updated_at AS "updatedAt"
+      FROM module_b_projects.project_workflows w
+      WHERE w.project_id = $1
+      ORDER BY w.is_default DESC, w.created_at DESC
+      LIMIT 1
+      `,
+      [projectId.trim()],
+    )) as Array<{
+      id: string;
+      projectId: string;
+      name: string;
+      isDefault: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+
+    const wf = workflows?.[0] ?? null;
+    if (!wf?.id) {
+      return { workflow: null, steps: [] };
+    }
+
+    const steps = (await this.dataSource.query(
+      `
+      SELECT s.id,
+             s.workflow_id AS "workflowId",
+             s.name,
+             s.step_order AS "stepOrder",
+             s.requires_validation AS "requiresValidation",
+             s.validator_role AS "validatorRole",
+             s.is_final_step AS "isFinalStep",
+             s.created_at AS "createdAt",
+             s.updated_at AS "updatedAt"
+      FROM module_b_projects.project_workflow_steps s
+      WHERE s.workflow_id = $1
+      ORDER BY s.step_order ASC
+      LIMIT 200
+      `,
+      [wf.id],
+    )) as Array<{
+      id: string;
+      workflowId: string;
+      name: string;
+      stepOrder: number;
+      requiresValidation: boolean;
+      validatorRole: string | null;
+      isFinalStep: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+
+    return { workflow: wf, steps };
+  }
+
   @Get('departments')
   async listDepartments(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
@@ -617,6 +717,7 @@ export class ProjectsLookupsController {
         u.first_name AS "firstName",
         u.last_name AS "lastName",
         u.email,
+        pm.role_in_project AS "roleInProject",
         COALESCE(o.name_code, o.name) AS "organizationLabel",
         COALESCE(e.department_id, NULLIF(TRIM(u.metadata->>'department'), '')::uuid) AS "departmentId",
         d.name AS "departmentName",
@@ -647,6 +748,7 @@ export class ProjectsLookupsController {
         u.first_name,
         u.last_name,
         u.email,
+        pm.role_in_project,
         o.name_code,
         o.name,
         e.department_id,

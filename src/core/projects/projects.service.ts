@@ -1076,11 +1076,9 @@ export class ProjectsService {
           this.projectMembersRepo.create({
             projectId: saved.id,
             userId,
-            roleInProject: managerIds.includes(userId)
+            roleInProject: managerIds.includes(userId) || userId === input.userId
               ? 'MANAGER'
-              : userId === input.userId
-                ? 'OWNER'
-                : 'MEMBER',
+              : 'MEMBER',
             addedBy: input.userId,
           }),
         );

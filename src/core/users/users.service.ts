@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
+import * as crypto from 'crypto';
 import { User } from './user.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { Role } from '../rbac/role.entity';
@@ -156,10 +157,9 @@ export class UsersService {
       firstName: payload.firstName,
       lastName: payload.lastName,
       phone: payload.phone ?? null,
-      // Pas de mot de passe local pour le moment, gestion via Firebase / lien d'activation
-      // On met null au lieu de string vide pour éviter les failles de connexion
-      passwordHash: null,
-      passwordSalt: null,
+      // Générer un mot de passe temporaire aléatoire (l'utilisateur devra le définir via Firebase ou reset)
+      passwordHash: crypto.randomBytes(32).toString('hex'),
+      passwordSalt: crypto.randomBytes(16).toString('hex'),
       language: payload.language ?? 'fr',
       timezone: payload.timezone ?? null,
       is2faEnabled: false,
@@ -211,6 +211,20 @@ export class UsersService {
       if (!savedUser.externalId) {
         await this.usersRepo.update(savedUser.id, { externalId: firebaseUser.uid });
         savedUser.externalId = firebaseUser.uid;
+      }
+
+      // Envoyer un email de définition de mot de passe via Firebase
+      try {
+        const resetLink = await admin.auth().generatePasswordResetLink(savedUser.email, {
+          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/set-password`,
+          handleCodeInApp: true,
+        });
+        console.log(`[INVITE] Password reset link generated for ${savedUser.email}`);
+        // Firebase envoie automatiquement l'email si on utilise le lien dans un template
+        // Pour l'instant on log le lien, mais en production il faudrait utiliser un service d'email
+        console.log(`[INVITE] Reset link (for dev): ${resetLink}`);
+      } catch (resetErr) {
+        console.error('[INVITE] Failed to generate password reset link:', resetErr);
       }
     } catch (err) {
       console.error('[INVITE] Failed to generate/send reset link', err); 

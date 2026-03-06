@@ -231,4 +231,21 @@ export class UsersController {
       dto.ids,
     );
   }
+
+  @Get(':id/login-history')
+  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  async getLoginHistory(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const query = req.query ?? {};
+    const limit = query.limit ? parseInt(query.limit as string, 10) : 20;
+
+    return this.usersService.getLoginHistoryForUser(
+      tenant?.id as string,
+      id,
+      Math.min(limit, 100),
+    );
+  }
 }

@@ -1046,6 +1046,82 @@ export class TasksController {
     );
   }
 
+  // ─── Validate by Task ID (simplifié pour le frontend) ─────────────
+
+  @Post('tasks/:taskId/validation-requests/approve')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.validate.project',
+      'projects.task.validate.tenant',
+      'projects.task.validate.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async approveValidationRequestByTaskId(
+    @Req() req: any,
+    @Param('taskId') taskId: string,
+    @Body() body: { comment?: string },
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+
+    return this.workflowValidationService.approveValidationRequestByTaskId(
+      {
+        userId: String(currentUser.id),
+        organizationId: String(tenant.id),
+        userPermissions: permissionCodes,
+      },
+      taskId,
+      body?.comment,
+    );
+  }
+
+  @Post('tasks/:taskId/validation-requests/reject')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.validate.project',
+      'projects.task.validate.tenant',
+      'projects.task.validate.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async rejectValidationRequestByTaskId(
+    @Req() req: any,
+    @Param('taskId') taskId: string,
+    @Body() body: { reason?: string },
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+
+    return this.workflowValidationService.rejectValidationRequestByTaskId(
+      {
+        userId: String(currentUser.id),
+        organizationId: String(tenant.id),
+        userPermissions: permissionCodes,
+      },
+      taskId,
+      body?.reason,
+    );
+  }
+
   // ─── Enhanced Dependency Endpoints ─────────────────────────────
 
   @Get('projects/:projectId/critical-path')
@@ -1073,4 +1149,46 @@ export class TasksController {
       String(tenant.id),
     );
   }
+  // endpoint des assignations
+
+  @Patch(':id/assignee')
+  @UseGuards(PermissionGuard)
+  @RequirePermission(
+    [
+      'projects.task.write.own',
+      'projects.task.write.project',
+      'projects.task.write.team',
+      'projects.task.write.department',
+      'projects.task.write.tenant',
+      'projects.task.write.global',
+    ],
+    { moduleCode: 'module_b_projects' },
+  )
+  async updateTaskAssignee(
+    @Req() req: any,
+    @Param('id') taskId: string,
+    @Body() body: { assigneeId: string | null },
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const permissionCodes = (req.permissionCodes as string[] | undefined) ?? [];
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Tenant manquant: (x-organization-code)');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Authetification de user manquant');
+    }
+
+    return this.projectsService.updateTaskAssignee({
+      taskId,
+      assigneeId: body.assigneeId,
+      contextOrganizationId: String(tenant.id),
+      userId: String(currentUser.id),
+      permissionCodes,
+    });
+  }
+
 }
+
+

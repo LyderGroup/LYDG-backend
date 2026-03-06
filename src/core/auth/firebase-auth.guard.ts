@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
 import { User } from '../users/user.entity';
+import { LoginHistory } from '../users/login-history.entity';
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
@@ -18,6 +19,8 @@ export class FirebaseAuthGuard implements CanActivate {
     private readonly configService: ConfigService,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
+    @InjectRepository(LoginHistory)
+    private readonly loginHistoryRepo: Repository<LoginHistory>,
   ) {}
 
   private ensureFirebaseApp(): void {
@@ -46,6 +49,39 @@ export class FirebaseAuthGuard implements CanActivate {
     }
 
     this.firebaseInitialized = true;
+  }
+
+  private parseUserAgent(userAgent: string | undefined): { browser: string; os: string; deviceType: string } {
+    if (!userAgent) {
+      return { browser: 'Unknown', os: 'Unknown', deviceType: 'Unknown' };
+    }
+
+    let browser = 'Unknown';
+    let os = 'Unknown';
+    let deviceType = 'Desktop';
+
+    // Detect browser
+    if (userAgent.includes('Firefox')) browser = 'Firefox';
+    else if (userAgent.includes('Edg')) browser = 'Edge';
+    else if (userAgent.includes('Chrome')) browser = 'Chrome';
+    else if (userAgent.includes('Safari')) browser = 'Safari';
+    else if (userAgent.includes('Opera') || userAgent.includes('OPR')) browser = 'Opera';
+
+    // Detect OS
+    if (userAgent.includes('Windows')) os = 'Windows';
+    else if (userAgent.includes('Mac OS')) os = 'macOS';
+    else if (userAgent.includes('Linux')) os = 'Linux';
+    else if (userAgent.includes('Android')) os = 'Android';
+    else if (userAgent.includes('iOS') || userAgent.includes('iPhone') || userAgent.includes('iPad')) os = 'iOS';
+
+    // Detect device type
+    if (userAgent.includes('Mobile') || userAgent.includes('Android') || userAgent.includes('iPhone')) {
+      deviceType = 'Mobile';
+    } else if (userAgent.includes('iPad') || userAgent.includes('Tablet')) {
+      deviceType = 'Tablet';
+    }
+
+    return { browser, os, deviceType };
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -79,6 +115,8 @@ export class FirebaseAuthGuard implements CanActivate {
 
     const externalId = decodedToken.uid;
     const email = decodedToken.email ?? null;
+    const ipAddress = request.ip || request.headers['x-forwarded-for'] || request.connection?.remoteAddress || null;
+    const userAgent = request.headers['user-agent'] || null;
 
     let user: User | null = null;
     let foundByEmail = false;
@@ -105,6 +143,31 @@ export class FirebaseAuthGuard implements CanActivate {
       throw new UnauthorizedException(
         'Aucun compte trouvé pour cet utilisateur dans le core.users. Veuillez contacter votre administrateur.',
       );
+    }
+
+    // Mettre à jour les informations de connexion
+    const { browser, os, deviceType } = this.parseUserAgent(userAgent);
+    
+    await this.usersRepo.update(user.id, {
+      lastLoginAt: new Date(),
+      lastLoginIp: ipAddress,
+      loginCount: (user.loginCount || 0) + 1,
+    });
+
+    // Enregistrer dans l'historique de connexion
+    try {
+      const loginRecord = this.loginHistoryRepo.create({
+        userId: user.id,
+        ipAddress,
+        userAgent,
+        browser,
+        os,
+        deviceType,
+        loginStatus: 'success',
+      });
+      await this.loginHistoryRepo.save(loginRecord);
+    } catch (err) {
+      console.error('[LOGIN_HISTORY] Failed to save login history:', err);
     }
 
     request.user = {

@@ -1,6 +1,7 @@
 import { Module, MiddlewareConsumer, NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { OrganizationsModule } from './core/organizations/organizations.module';
@@ -19,6 +20,7 @@ import { ProjectsModule } from './core/projects/projects.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    EventEmitterModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -42,11 +44,11 @@ import { ProjectsModule } from './core/projects/projects.module';
             const parsed = new URL(databaseUrl);
             const normalized = new URL(databaseUrl);
             normalized.hostname = normalized.hostname.toLowerCase();
-            const normalizedDatabaseUrl = normalized.toString(); 
+            const normalizedDatabaseUrl = normalized.toString();
             console.log(
               `[db] Using DATABASE_URL host=${normalized.hostname} port=${normalized.port || '5432'} db=${normalized.pathname?.replace('/', '') || ''} ssl=${useSsl}`,
             );
-          } catch { 
+          } catch {
             console.log(`[db] Using DATABASE_URL (unparseable) ssl=${useSsl}`);
           }
 
@@ -75,7 +77,7 @@ import { ProjectsModule } from './core/projects/projects.module';
         const database =
           configService.get<string>('DB_NAME') ||
           configService.get<string>('PGDATABASE') ||
-          'lydg'; 
+          'lydg';
         console.log(`[db] Using params host=${host} port=${portRaw} db=${database} ssl=${useSsl}`);
 
         return {
@@ -111,7 +113,7 @@ import { ProjectsModule } from './core/projects/projects.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer  
+    consumer
       .apply(TenantMiddleware)
       .forRoutes({ path: 'core/*', method: RequestMethod.ALL });
   }

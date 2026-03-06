@@ -38,7 +38,7 @@ export class ProjectCommentsGateway {
     private readonly usersRepo: Repository<User>,
     @InjectRepository(ProjectComment)
     private readonly projectCommentsRepo: Repository<ProjectComment>,
-  ) {}
+  ) { }
 
   private ensureFirebaseInit(): void {
     if (admin.apps.length > 0) return;
@@ -48,7 +48,7 @@ export class ProjectCommentsGateway {
     let privateKey = this.configService.get<string>('FIREBASE_PRIVATE_KEY');
 
     if (!projectId || !clientEmail || !privateKey) {
-      throw new UnauthorizedException('Missing Firebase service account configuration');
+      throw new UnauthorizedException('Configuration firebase manquant dans configuration');
     }
 
     privateKey = privateKey.replace(/\\n/g, '\n');
@@ -100,14 +100,7 @@ export class ProjectCommentsGateway {
     client.data.userId = String(user.id);
     client.data.organizationId = String(organization.id);
   }
-
-  async handleConnection(client: AuthedSocket) {
-    try {
-      await this.authenticate(client);
-    } catch {
-      client.disconnect(true);
-    }
-  }
+ 
 
   @SubscribeMessage('project.join')
   async joinProjectRoom(
@@ -118,16 +111,43 @@ export class ProjectCommentsGateway {
     const organizationId = client.data.organizationId;
     const projectId = typeof body?.projectId === 'string' ? body.projectId.trim() : '';
 
-    if (!userId || !organizationId) return { ok: false, reason: 'unauthorized' };
+    if (!userId || !organizationId) {
+      console.warn('[project.join] unauthorized - missing userId or organizationId');
+      return { ok: false, reason: 'unauthorized' };
+    }
     if (!projectId) return { ok: false, reason: 'missing projectId' };
 
-    const ok = (await this.organizationsRepo.manager.query(
+    const result = await this.organizationsRepo.manager.query(
       `
-      SELECT 1 AS ok
+      WITH user_admin AS (
+        SELECT 1 AS is_admin
+        FROM core.user_roles ur
+        INNER JOIN core.roles r ON r.id = ur.role_id
+        WHERE ur.user_id = $2
+          AND ur.is_active = true
+          AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+          AND r.is_active = true
+          AND (
+            r.is_system_role = true
+            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
+            OR (r.organization_id = $3 AND r.code IN ('COUNTRY_MANAGER', 'DEPARTMENT_MANAGER', 'PROJECT_MANAGER'))
+          )
+        LIMIT 1
+      )
+      SELECT 
+        p.id,
+        p.created_by,
+        p.manager_id,
+        m.id AS member_id,
+        pma.id AS manager_row_id,
+        (SELECT 1 FROM user_admin) AS is_admin
       FROM module_b_projects.projects p
       LEFT JOIN module_b_projects.project_members m
         ON m.project_id = p.id
        AND m.user_id = $2
+      LEFT JOIN module_b_projects.project_managers pma
+        ON pma.project_id = p.id
+       AND pma.user_id = $2
       WHERE p.id = $1
         AND (
           p.organization_id = $3
@@ -138,17 +158,34 @@ export class ProjectCommentsGateway {
               AND po.organization_id = $3
           )
         )
-        AND (
-          m.id IS NOT NULL
-          OR p.manager_id = $2
-          OR p.created_by = $2
-        )
       LIMIT 1
       `,
       [projectId, userId, organizationId],
-    )) as Array<{ ok?: number }>;
+    );
 
-    if (!ok[0]?.ok) {
+    if (!result?.[0]) {
+      console.warn('[project.join] project not found or not in organization', { projectId, organizationId });
+      return { ok: false, reason: 'not_found' };
+    }
+
+    const row = result[0];
+    const hasAccess =
+      row.member_id ||
+      row.manager_row_id ||
+      row.manager_id === userId ||
+      row.created_by === userId ||
+      row.is_admin;
+
+    if (!hasAccess) {
+      console.warn('[project.join] access denied', {
+        projectId,
+        userId,
+        created_by: row.created_by,
+        manager_id: row.manager_id,
+        member_id: row.member_id,
+        manager_row_id: row.manager_row_id,
+        is_admin: row.is_admin
+      });
       return { ok: false, reason: 'forbidden' };
     }
 

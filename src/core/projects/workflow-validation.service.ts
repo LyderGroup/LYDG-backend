@@ -480,6 +480,20 @@ export class WorkflowValidationService {
  
       if (task.assigneeId) {
         try {
+          // Notification in-app
+          await this.notificationService.create({
+            userId: task.assigneeId,
+            organizationId: ctx.organizationId,
+            type: 'validation_approved',
+            title: `Validation approuvée: ${task.title}`,
+            message: `L'étape "${step.name}" a été approuvée. Vous pouvez passer à l'étape suivante.`,
+            data: {
+              taskId: task.id,
+              stepId: step.id,
+              projectId: task.projectId,
+            },
+          });
+          // Notification push FCM
           await this.fcmService.sendToUser(
             task.assigneeId,
             `Validation approuvée: ${task.title}`,
@@ -491,7 +505,7 @@ export class WorkflowValidationService {
             },
           );
         } catch (notifError) {
-          console.error('[WorkflowValidation] FCM notification error (non-blocking):', notifError);
+          console.error('[WorkflowValidation] Notification error (non-blocking):', notifError);
         }
       }
 
@@ -558,6 +572,20 @@ export class WorkflowValidationService {
       // Notifier l'assignee du rejet (non-bloquant)
       if (task.assigneeId) {
         try {
+          // Notification in-app
+          await this.notificationService.create({
+            userId: task.assigneeId,
+            organizationId: ctx.organizationId,
+            type: 'validation_rejected',
+            title: `Validation rejetée: ${task.title}`,
+            message: `L'étape "${step.name}" a été rejetée. Raison: ${reason}`,
+            data: {
+              taskId: task.id,
+              stepId: step.id,
+              projectId: task.projectId,
+            },
+          });
+          // Notification push FCM
           await this.fcmService.sendToUser(
             task.assigneeId,
             `Validation rejetée: ${task.title}`,
@@ -569,12 +597,54 @@ export class WorkflowValidationService {
             },
           );
         } catch (notifError) {
-          console.error('[WorkflowValidation] FCM notification error (non-blocking):', notifError);
+          console.error('[WorkflowValidation] Notification error (non-blocking):', notifError);
         }
       }
 
       return request;
     });
+  }
+
+  /**
+   * Approuve la demande de validation en attente pour une tâche (par taskId).
+   */
+  async approveValidationRequestByTaskId(
+    ctx: ValidationContext,
+    taskId: string,
+    comment?: string,
+  ): Promise<TaskWorkflowValidation> {
+    // Trouver la demande de validation en attente pour cette tâche
+    const request = await this.validationRequestRepo.findOne({
+      where: { taskId, status: 'pending' },
+      relations: ['task', 'step'],
+    });
+
+    if (!request) {
+      throw new NotFoundException('Aucune demande de validation en attente pour cette tâche');
+    }
+
+    return this.approveValidationRequest(ctx, request.id, comment);
+  }
+
+  /**
+   * Rejette la demande de validation en attente pour une tâche (par taskId).
+   */
+  async rejectValidationRequestByTaskId(
+    ctx: ValidationContext,
+    taskId: string,
+    reason?: string,
+  ): Promise<ValidationRequest> {
+    // Trouver la demande de validation en attente pour cette tâche
+    const request = await this.validationRequestRepo.findOne({
+      where: { taskId, status: 'pending' },
+      relations: ['task', 'step'],
+    });
+
+    if (!request) {
+      throw new NotFoundException('Aucune demande de validation en attente pour cette tâche');
+    }
+
+    return this.rejectValidationRequest(ctx, request.id, reason ?? 'Rejeté sans raison');
   }
 
   // ─── Private helpers ───────────────────────────────────────────
@@ -660,9 +730,15 @@ export class WorkflowValidationService {
 
     if (currentIndex > 0) {
       const previousStep = allSteps[currentIndex - 1];
+      const prevStepName = String(previousStep.name ?? '').toLowerCase();
+      let newStatus = 'revision';
+      if (prevStepName === 'en cours') newStatus = 'in_progress';
+      else if (prevStepName === 'à faire' || prevStepName === 'draft') newStatus = 'todo';
+      else if (prevStepName === 'terminé' || prevStepName === 'done') newStatus = 'completed';
+      
       await em.update(Task, task.id, {
         currentStepId: previousStep.id,
-        status: 'revision',
+        status: newStatus,
       });
     }
   }

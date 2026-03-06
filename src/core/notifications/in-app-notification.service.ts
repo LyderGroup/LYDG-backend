@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification, NotificationType } from './notification.entity';
+import { NotificationsRealtimeService } from './notifications.realtime';
 
 export interface CreateNotificationDto {
   userId: string;
@@ -17,6 +18,7 @@ export class InAppNotificationService {
   constructor(
     @InjectRepository(Notification)
     private readonly notificationRepo: Repository<Notification>,
+    private readonly realtimeService: NotificationsRealtimeService,
   ) {}
  
   async create(dto: CreateNotificationDto): Promise<Notification> {
@@ -30,9 +32,28 @@ export class InAppNotificationService {
       isRead: false,
     });
 
-    return this.notificationRepo.save(notification);
+    const saved = await this.notificationRepo.save(notification);
+
+    // Émettre en temps réel
+    try {
+      this.realtimeService.emitNotificationCreated({
+        userId: saved.userId,
+        notification: {
+          id: saved.id,
+          type: saved.type,
+          title: saved.title,
+          message: saved.message,
+          data: saved.data,
+          createdAt: saved.createdAt,
+        },
+      });
+    } catch (e) {
+      console.error('[InAppNotificationService] Realtime emit error:', e);
+    }
+
+    return saved;
   }
- 
+
   async createMany(dtos: CreateNotificationDto[]): Promise<Notification[]> {
     const notifications = dtos.map(dto => 
       this.notificationRepo.create({
@@ -46,7 +67,28 @@ export class InAppNotificationService {
       })
     );
 
-    return this.notificationRepo.save(notifications);
+    const saved = await this.notificationRepo.save(notifications);
+
+    // Émettre chaque notification en temps réel
+    for (const notification of saved) {
+      try {
+        this.realtimeService.emitNotificationCreated({
+          userId: notification.userId,
+          notification: {
+            id: notification.id,
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            data: notification.data,
+            createdAt: notification.createdAt,
+          },
+        });
+      } catch (e) {
+        console.error('[InAppNotificationService] Realtime emit error:', e);
+      }
+    }
+
+    return saved;
   }
 
   /**

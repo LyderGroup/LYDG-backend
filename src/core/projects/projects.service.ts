@@ -14,6 +14,7 @@ import {
   DataSource,
 } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Organization } from '../organizations/organizations.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { ProjectMember } from './project-member.entity';
@@ -54,7 +55,7 @@ export class ProjectsService {
     @InjectRepository(ProjectComment)
     private readonly projectCommentsRepo: Repository<ProjectComment>,
     @InjectRepository(Project)
-    private readonly projectsRepo: Repository<Project>, 
+    private readonly projectsRepo: Repository<Project>,
     @InjectRepository(ProjectMember)
     private readonly projectMembersRepo: Repository<ProjectMember>,
     @InjectRepository(ProjectWorkflow)
@@ -74,7 +75,8 @@ export class ProjectsService {
     private readonly fcmService: FcmService,
     private readonly taskDependencyService: TaskDependencyService,
     private readonly dataSource: DataSource,
-  ) {}
+    private readonly eventEmitter: EventEmitter2,
+  ) { }
 
   private async ensureDefaultWorkflowForProject(input: {
     projectId: string;
@@ -98,10 +100,9 @@ export class ProjectsService {
     );
 
     const steps = [
-      { name: 'Draft', stepOrder: 0, requiresValidation: false, validatorRole: null, isFinalStep: false },
-      { name: 'Review', stepOrder: 1, requiresValidation: false, validatorRole: null, isFinalStep: false },
-      { name: 'Approved', stepOrder: 2, requiresValidation: true, validatorRole: 'MANAGER_OR_OWNER', isFinalStep: false },
-      { name: 'Done', stepOrder: 3, requiresValidation: true, validatorRole: 'MANAGER_OR_OWNER', isFinalStep: true },
+      { name: 'À faire', stepOrder: 0, requiresValidation: false, validatorRole: null, isFinalStep: false },
+      { name: 'En cours', stepOrder: 1, requiresValidation: false, validatorRole: null, isFinalStep: false },
+      { name: 'Terminé', stepOrder: 2, requiresValidation: true, validatorRole: 'MANAGER_OR_OWNER', isFinalStep: true },
     ];
 
     const savedSteps = await this.projectWorkflowStepsRepo.save(
@@ -131,6 +132,20 @@ export class ProjectsService {
   }): Promise<{ projectId: string; organizationId: string }> {
     const rows = (await this.projectsRepo.manager.query(
       `
+      WITH user_admin AS (
+        SELECT 1 AS is_admin
+        FROM core.user_roles ur
+        INNER JOIN core.roles r ON r.id = ur.role_id
+        WHERE ur.user_id = $2
+          AND ur.is_active = true
+          AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+          AND r.is_active = true
+          AND (
+            r.is_system_role = true
+            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
+          )
+        LIMIT 1
+      )
       SELECT p.id AS project_id, p.organization_id AS organization_id
       FROM module_b_projects.projects p
       WHERE p.id = $1
@@ -149,6 +164,7 @@ export class ProjectsService {
           )
           OR p.manager_id = $2
           OR p.created_by = $2
+          OR EXISTS (SELECT 1 FROM user_admin)
         )
       LIMIT 1
       `,
@@ -299,7 +315,7 @@ export class ProjectsService {
       projectId: saved.projectId,
       payload,
     });
- 
+
     this.sendProjectCommentNotifications(saved.projectId, input.userId, authorName, content, input.contextOrganizationId)
       .catch(err => console.error('[ProjectsService] Error sending project comment notifications:', err));
 
@@ -318,7 +334,7 @@ export class ProjectsService {
     });
 
     if (!project) return;
- 
+
     const members = await this.projectMembersRepo.find({
       where: { projectId },
       select: ['userId'],
@@ -329,6 +345,23 @@ export class ProjectsService {
         .map(m => m.userId)
         .filter(id => id !== authorId)
     );
+
+    // Ajouter le chef de département
+    if (project.departmentId) {
+      const deptManagers = await this.projectsRepo.manager.query(
+        `
+        SELECT dm.user_id
+        FROM module_c_rh.department_managers dm
+        WHERE dm.department_id = $1
+        `,
+        [project.departmentId],
+      );
+      for (const row of deptManagers || []) {
+        if (row.user_id && row.user_id !== authorId) {
+          recipientIds.add(row.user_id);
+        }
+      }
+    }
 
     const title = `Nouveau message sur le projet: ${project.name}`;
     const body = `${authorName || 'Quelqu\'un'} a dit : ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`;
@@ -342,13 +375,13 @@ export class ProjectsService {
         message: body,
         type: 'project_comment',
         data: { projectId, authorId },
-      }).catch(() => {});
+      }).catch(() => { });
 
       // FCM (Push)
       await this.fcmService.sendToUser(recipientId, title, body, {
         type: 'project_comment',
         projectId,
-      }).catch(() => {});
+      }).catch(() => { });
     }
   }
 
@@ -685,21 +718,56 @@ export class ProjectsService {
       task.id,
       input.contextOrganizationId,
     );
- 
+
     let statusPatch: string | undefined;
     const stepName = String(next.name ?? '').toLowerCase();
-    if (next.isFinalStep || stepName === 'done') statusPatch = 'completed';
+    if (next.isFinalStep || stepName === 'done' || stepName === 'terminé') statusPatch = 'completed';
     else if (stepName === 'approved') statusPatch = 'approved';
     else if (stepName === 'review' || stepName.includes('review')) statusPatch = 'review';
-    else if (stepName === 'draft') statusPatch = 'todo';
+    else if (stepName === 'draft' || stepName === 'à faire') statusPatch = 'todo';
+    else if (stepName === 'en cours') statusPatch = 'in_progress';
 
     await this.tasksRepo.update(
       { id: task.id, organizationId: input.contextOrganizationId },
       {
         currentStepId: next.id,
         ...(statusPatch ? { status: statusPatch } : {}),
+        ...(statusPatch === 'completed' ? { completedAt: new Date() } : {}),
       } as QueryDeepPartialEntity<Task>,
     );
+
+    // Notification de tâche terminée
+    if (statusPatch === 'completed' && task.projectId) {
+      const project = await this.projectsRepo.findOne({ where: { id: task.projectId } });
+      if (project) {
+        // Notifier le manager du projet et le créateur
+        const recipientIds = new Set<string>();
+        if (project.managerId && project.managerId !== input.userId) recipientIds.add(project.managerId);
+        if (project.createdBy && project.createdBy !== input.userId) recipientIds.add(project.createdBy);
+        if (task.assigneeId && task.assigneeId !== input.userId) recipientIds.add(task.assigneeId);
+
+        for (const recipientId of recipientIds) {
+          try {
+            await this.inAppNotificationService.create({
+              userId: recipientId,
+              organizationId: input.contextOrganizationId,
+              type: 'task_completed',
+              title: `Tâche terminée: ${task.title}`,
+              message: `La tâche "${task.title}" du projet "${project.name}" a été marquée comme terminée.`,
+              data: { taskId: task.id, projectId: task.projectId },
+            });
+            await this.fcmService.sendToUser(
+              recipientId,
+              `Tâche terminée: ${task.title}`,
+              `La tâche "${task.title}" du projet "${project.name}" a été marquée comme terminée.`,
+              { type: 'task_completed', taskId: task.id, projectId: task.projectId },
+            );
+          } catch (e) {
+            console.error('[moveTaskToNextWorkflowStep] Notification error:', e);
+          }
+        }
+      }
+    }
 
     return {
       taskId: task.id,
@@ -760,13 +828,13 @@ export class ProjectsService {
       currentStepId: task.currentStepId,
       currentStep: current
         ? {
-            id: current.id,
-            name: current.name,
-            stepOrder: current.stepOrder,
-            requiresValidation: current.requiresValidation,
-            validatorRole: current.validatorRole,
-            isFinalStep: current.isFinalStep,
-          }
+          id: current.id,
+          name: current.name,
+          stepOrder: current.stepOrder,
+          requiresValidation: current.requiresValidation,
+          validatorRole: current.validatorRole,
+          isFinalStep: current.isFinalStep,
+        }
         : null,
       steps: steps.map((s) => ({
         id: s.id,
@@ -838,7 +906,7 @@ export class ProjectsService {
   private async getUserDepartmentIdsInOrg(input: {
     userId: string;
     organizationId: string;
-  }): Promise<string[]> { 
+  }): Promise<string[]> {
     try {
       const rows = (await this.userRolesRepo.manager.query(
         `
@@ -852,8 +920,8 @@ export class ProjectsService {
       )) as Array<{ departmentId?: string }>;
       const ids = rows.map((r) => String(r.departmentId ?? '')).filter(Boolean);
       if (ids.length > 0) return this.uniqueStrings(ids);
-    } catch { 
-    } 
+    } catch {
+    }
     const fallback = (await this.userRolesRepo.manager.query(
       `
       SELECT (u.metadata->>'department')::text AS "departmentId"
@@ -907,7 +975,7 @@ export class ProjectsService {
     if (!deptPairs.length) {
       throw new BadRequestException('departments is required');
     }
- 
+
     for (const d of deptPairs) {
       if (!orgIds.includes(d.organizationId)) {
         throw new BadRequestException(`Invalid departments: organizationId not in organizationIds (${d.organizationId})`);
@@ -919,7 +987,7 @@ export class ProjectsService {
 
     const hasSystemRole = await this.userHasAnySystemRole(input.userId, input.contextOrganizationId);
 
-    if (!hasSystemRole) { 
+    if (!hasSystemRole) {
       const canCreate = await this.userHasAnyRoleInOrgs({
         userId: input.userId,
         organizationIds: orgIds,
@@ -974,7 +1042,7 @@ export class ProjectsService {
         }
       }
     }
- 
+
     for (const d of deptPairs) {
       const rows = (await this.projectsRepo.manager.query(
         `
@@ -989,7 +1057,7 @@ export class ProjectsService {
         throw new BadRequestException(`Invalid departmentId for organization (${d.organizationId})`);
       }
     }
- 
+
     const primaryOrgId = orgIds.includes(input.contextOrganizationId) ? input.contextOrganizationId : orgIds[0]!;
     const primaryDept =
       deptPairs.find((d) => d.organizationId === primaryOrgId)?.departmentId ??
@@ -1052,9 +1120,10 @@ export class ProjectsService {
       console.error('[createProjectV2] Link departments failed:', e);
     }
 
-    // Link managers
+    // Link managers - inclure le créateur automatiquement
     try {
-      for (const managerId of managerIds) {
+      const allManagerIds = this.uniqueStrings([...managerIds, input.userId]);
+      for (const managerId of allManagerIds) {
         await this.projectsRepo.manager.query(
           `
           INSERT INTO module_b_projects.project_managers (project_id, user_id, manager_role, added_by)
@@ -1133,13 +1202,13 @@ export class ProjectsService {
         message: body,
         type: 'project_created',
         data: { projectId, creatorId },
-      }).catch(() => {});
+      }).catch(() => { });
 
       // FCM (Push)
       await this.fcmService.sendToUser(recipientId, title, body, {
         type: 'project_created',
         projectId,
-      }).catch(() => {});
+      }).catch(() => { });
     }
   }
 
@@ -1698,6 +1767,23 @@ export class ProjectsService {
     if (task.project?.managerId && task.project.managerId !== authorId) recipientIds.add(task.project.managerId);
     if (task.project?.createdBy && task.project.createdBy !== authorId) recipientIds.add(task.project.createdBy);
 
+    // Ajouter le chef de département
+    if (task.project?.departmentId) {
+      const deptManagers = await this.projectsRepo.manager.query(
+        `
+        SELECT dm.user_id
+        FROM module_c_rh.department_managers dm
+        WHERE dm.department_id = $1
+        `,
+        [task.project.departmentId],
+      );
+      for (const row of deptManagers || []) {
+        if (row.user_id && row.user_id !== authorId) {
+          recipientIds.add(row.user_id);
+        }
+      }
+    }
+
     const title = `Nouveau message sur la tâche: ${task.title}`;
     const body = `${authorName || 'Quelqu\'un'} a dit : ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`;
 
@@ -1710,13 +1796,13 @@ export class ProjectsService {
         message: body,
         type: 'task_comment',
         data: { taskId, authorId },
-      }).catch(() => {});
+      }).catch(() => { });
 
       // FCM (Push)
       await this.fcmService.sendToUser(recipientId, title, body, {
         type: 'task_comment',
         taskId,
-      }).catch(() => {});
+      }).catch(() => { });
     }
   }
 
@@ -1735,7 +1821,7 @@ export class ProjectsService {
       .where('t.id = :id', { id: input.taskId });
 
     const hasExplicitReadPermission = input.permissionCodes.some(p => p.startsWith('projects.task.read'));
-    
+
     if (!hasExplicitReadPermission) {
       // Permettre à l'assignee d'accéder à sa tâche
       qb.andWhere(
@@ -1793,7 +1879,7 @@ export class ProjectsService {
     // Cross-organization access: allow if user is related to the task/project
     // (member, manager, creator, assignee) regardless of their organization
     const isRelatedToTask = await this.isUserRelatedToTask(input.userId, input.taskId);
-    
+
     if (isRelatedToTask) {
       // User is directly related to the task/project, allow access
       return task;
@@ -1991,6 +2077,37 @@ export class ProjectsService {
     task.currentStepId = wf.firstStepId;
 
     const saved = await this.tasksRepo.save(task);
+
+    // Envoyer une notification à l'assigné si différent du créateur
+    if (saved.assigneeId && saved.assigneeId !== input.userId) {
+      try {
+        await this.inAppNotificationService.create({
+          userId: saved.assigneeId,
+          organizationId: input.contextOrganizationId,
+          type: 'task_assigned',
+          title: `Nouvelle tâche assignée: ${saved.title}`,
+          message: `Vous avez été assigné à la tâche "${saved.title}" dans le projet "${project.name}".`,
+          data: {
+            taskId: saved.id,
+            projectId: saved.projectId,
+            projectName: project.name,
+          },
+        });
+
+        await this.fcmService.sendToUser(
+          saved.assigneeId,
+          `Nouvelle tâche assignée: ${saved.title}`,
+          `Vous avez été assigné à la tâche "${saved.title}" dans le projet "${project.name}".`,
+          {
+            type: 'task_assigned',
+            taskId: saved.id,
+            projectId: saved.projectId,
+          },
+        );
+      } catch (notifError) {
+        console.error('[createTask] Notification error (non-blocking):', notifError);
+      }
+    }
 
     await this.recalcProjectProgressFromTasks({
       projectId: saved.projectId,
@@ -2458,9 +2575,9 @@ export class ProjectsService {
 
     const candidateOrgIds =
       readScope === 'global' ||
-      readScope === 'tenant' ||
-      readScope === 'project' ||
-      readScope === 'own'
+        readScope === 'tenant' ||
+        readScope === 'project' ||
+        readScope === 'own'
         ? desiredOrgIds.length
           ? desiredOrgIds
           : allowedOrgIds
@@ -2635,5 +2752,102 @@ export class ProjectsService {
         updatedAt: t.updatedAt,
       };
     });
+  }
+
+
+  async updateTaskAssignee(input: {
+    taskId: string;
+    assigneeId: string | null;
+    contextOrganizationId: string;
+    userId: string;
+    permissionCodes: string[];
+  }): Promise<{ ok: boolean; taskId: string; assigneeId: string | null; assigneeName: string | null }> {
+    console.log('[updateTaskAssignee] Input:', JSON.stringify(input));
+
+    const task = await this.tasksRepo.findOne({
+      where: { id: input.taskId },
+      relations: ['project', 'assignee'],
+    });
+
+    console.log('[updateTaskAssignee] Task found:', task ? { id: task.id, projectId: task.projectId, assigneeId: task.assigneeId } : null);
+
+    if (!task) {
+      throw new NotFoundException('Task not found');
+    }
+
+    const hasWritePermission = input.permissionCodes.some((p) =>
+      p.startsWith('projects.task.write.'),
+    );
+
+    if (!hasWritePermission) {
+      throw new ForbiddenException('Voun avez pas les permissions ecriture');
+    }
+
+    const oldAssigneeId = task.assigneeId;
+    const newAssigneeId = input.assigneeId;
+
+    // 3. Si un nouvel assigné est spécifié, vérifier qu'il est membre du projet
+    if (newAssigneeId) {
+      console.log('[updateTaskAssignee] Checking if user is project member:', { projectId: task.projectId, newAssigneeId });
+      const isMember = await this.projectMembersRepo.findOne({
+        where: { projectId: task.projectId, userId: newAssigneeId },
+      });
+
+      console.log('[updateTaskAssignee] Is member:', !!isMember);
+
+      if (!isMember) {
+        throw new BadRequestException('The specified user is not a member of this project');
+      }
+    }
+
+    // 4. Mettre à jour l'assigné
+    console.log('[updateTaskAssignee] Updating task assignee from', oldAssigneeId, 'to', newAssigneeId);
+    task.assigneeId = newAssigneeId;
+    task.updatedAt = new Date();
+    await this.tasksRepo.save(task);
+    console.log('[updateTaskAssignee] Task saved successfully');
+
+    // 5. Récupérer les infos pour les notifications
+    const taskWithProject = await this.tasksRepo.findOne({
+      where: { id: input.taskId },
+      relations: ['project', 'assignee'],
+    });
+
+    const projectName = taskWithProject?.project?.name ?? 'Projet inconnu';
+    const assigneeName = taskWithProject?.assignee
+      ? `${taskWithProject.assignee.firstName} ${taskWithProject.assignee.lastName}`.trim()
+      : null;
+ 
+    if (newAssigneeId && newAssigneeId !== oldAssigneeId) {
+      this.eventEmitter.emit('task.assigned', {
+        taskId: input.taskId,
+        projectId: task.projectId,
+        assigneeId: newAssigneeId,
+        oldAssigneeId,
+        projectName,
+        taskTitle: task.title,
+        organizationId: input.contextOrganizationId,
+        triggeredBy: input.userId,
+      });
+    }
+ 
+    if (oldAssigneeId && oldAssigneeId !== newAssigneeId) {
+      this.eventEmitter.emit('task.unassigned', {
+        taskId: input.taskId,
+        projectId: task.projectId,
+        oldAssigneeId,
+        projectName,
+        taskTitle: task.title,
+        organizationId: input.contextOrganizationId,
+        triggeredBy: input.userId,
+      });
+    }
+
+    return {
+      ok: true,
+      taskId: input.taskId,
+      assigneeId: newAssigneeId,
+      assigneeName,
+    };
   }
 }

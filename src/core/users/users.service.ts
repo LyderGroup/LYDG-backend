@@ -5,6 +5,7 @@ import { In, Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
 import { User } from './user.entity';
+import { LoginHistory } from './login-history.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { Role } from '../rbac/role.entity';
 
@@ -34,6 +35,8 @@ export class UsersService {
     private readonly configService: ConfigService,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
+    @InjectRepository(LoginHistory)
+    private readonly loginHistoryRepo: Repository<LoginHistory>,
     @InjectRepository(UserRole)
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(Role)
@@ -222,7 +225,7 @@ export class UsersService {
         console.log(`[INVITE] Password reset link generated for ${savedUser.email}`);
         // Firebase envoie automatiquement l'email si on utilise le lien dans un template
         // Pour l'instant on log le lien, mais en production il faudrait utiliser un service d'email
-        console.log(`[INVITE] Reset link (for dev): ${resetLink}`);
+        console.log(`[INVITE] Reset link : ${resetLink}`);
       } catch (resetErr) {
         console.error('[INVITE] Failed to generate password reset link:', resetErr);
       }
@@ -430,5 +433,35 @@ export class UsersService {
 
     const result = await this.usersRepo.update(where, patch as any);
     return { affected: result.affected ?? 0 };
+  }
+
+  async getLoginHistoryForUser(
+    organizationId: string,
+    userId: string,
+    limit: number = 20,
+  ): Promise<{ data: LoginHistory[]; meta: { total: number } }> {
+    // Verifier que l'utilisateur appartient a l'organisation
+    const user = await this.usersRepo.findOne({
+      where: { id: userId, organizationId },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Utilisateur introuvable');
+    }
+
+    const history = await this.loginHistoryRepo.find({
+      where: { userId },
+      order: { loginAt: 'DESC' },
+      take: limit,
+    });
+
+    const total = await this.loginHistoryRepo.count({
+      where: { userId },
+    });
+
+    return {
+      data: history,
+      meta: { total },
+    };
   }
 }

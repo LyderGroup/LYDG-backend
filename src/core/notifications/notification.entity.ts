@@ -6,21 +6,20 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
-  In, 
-  Repository, 
-  DataSource 
 } from 'typeorm';
 import { User } from '../users/user.entity';
 
-export type NotificationType = 
+export type NotificationType =
   | 'validation_request'
   | 'validation_approved'
   | 'validation_rejected'
   | 'task_assigned'
+  | 'task_unassigned'
   | 'task_completed'
   | 'task_comment'
   | 'project_created'
   | 'project_comment'
+  | 'project_status_changed'
   | 'mention'
   | 'deadline_reminder';
 

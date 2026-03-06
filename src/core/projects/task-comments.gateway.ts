@@ -37,7 +37,7 @@ export class TaskCommentsGateway {
     private readonly rolesRepo: Repository<Role>,
     @InjectRepository(UserRole)
     private readonly userRolesRepo: Repository<UserRole>,
-  ) {}
+  ) { }
 
   private ensureFirebaseInit(): void {
     if (admin.apps.length > 0) return;
@@ -47,7 +47,7 @@ export class TaskCommentsGateway {
     let privateKey = this.configService.get<string>('FIREBASE_PRIVATE_KEY');
 
     if (!projectId || !clientEmail || !privateKey) {
-      throw new UnauthorizedException('Missing Firebase service account configuration');
+      throw new UnauthorizedException('Configuration firebase manquants');
     }
 
     privateKey = privateKey.replace(/\\n/g, '\n');
@@ -66,8 +66,11 @@ export class TaskCommentsGateway {
     const token = typeof auth?.token === 'string' ? auth.token.trim() : '';
     const orgCode = typeof auth?.orgCode === 'string' ? auth.orgCode.trim() : '';
 
+    console.log('[TaskCommentsGateway] authenticate - orgCode:', orgCode, 'token length:', token.length);
+
     if (!token || !orgCode) {
-      throw new UnauthorizedException('Missing token or orgCode');
+      console.warn('[TaskCommentsGateway] authenticate failed - missing token or orgCode');
+      throw new UnauthorizedException('Token ou OrgCode manquant');
     }
 
     this.ensureFirebaseInit();
@@ -76,12 +79,12 @@ export class TaskCommentsGateway {
     try {
       decoded = await admin.auth().verifyIdToken(token);
     } catch {
-      throw new UnauthorizedException('Invalid token');
+      throw new UnauthorizedException('token invalide');
     }
 
     const organization = await this.organizationsRepo.findOne({ where: { nameCode: orgCode } });
     if (!organization?.id) {
-      throw new UnauthorizedException('Invalid organization');
+      throw new UnauthorizedException('organization invalide');
     }
 
     const externalId = String(decoded.uid);
@@ -93,7 +96,7 @@ export class TaskCommentsGateway {
     }
 
     if (!user?.id) {
-      throw new UnauthorizedException('Unknown user');
+      throw new UnauthorizedException('utilisateur inconnue');
     }
 
     client.data.userId = String(user.id);
@@ -103,9 +106,52 @@ export class TaskCommentsGateway {
   async handleConnection(client: AuthedSocket) {
     try {
       await this.authenticate(client);
-    } catch {
+      console.log('[TaskCommentsGateway] Client connected - userId:', client.data.userId, 'organizationId:', client.data.organizationId);
+    } catch (err) {
+      console.error('[TaskCommentsGateway] Auth failed:', err);
       client.disconnect(true);
     }
+  }
+
+  @SubscribeMessage('notifications.subscribe')
+  async subscribeToNotifications(
+    @ConnectedSocket() client: AuthedSocket,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const userId = client.data.userId;
+    const organizationId = client.data.organizationId;
+
+    console.log('[TaskCommentsGateway] notifications.subscribe - userId:', userId, 'organizationId:', organizationId);
+
+    if (!userId || !organizationId) {
+      console.warn('[TaskCommentsGateway] notifications.subscribe unauthorized - client.data:', client.data);
+      return { ok: false, reason: 'unauthorized' };
+    }
+
+    // Rejoindre la room utilisateur pour les notifications
+    await client.join(`user:${userId}:notifications`);
+
+    console.log('[TaskCommentsGateway] notifications.subscribe success for user:', userId);
+    return { ok: true };
+  }
+
+  @SubscribeMessage('notifications.unsubscribe')
+  async unsubscribeFromNotifications(
+    @ConnectedSocket() client: AuthedSocket,
+  ): Promise<{ ok: true }> {
+    const userId = client.data.userId;
+
+    if (userId) {
+      await client.leave(`user:${userId}:notifications`);
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * Émet une notification à un utilisateur spécifique
+   */
+  emitNotificationToUser(input: { userId: string; event: string; payload: any }) {
+    this.server.to(`user:${input.userId}:notifications`).emit(input.event, input.payload);
   }
 
   @SubscribeMessage('task.join')
@@ -136,7 +182,7 @@ export class TaskCommentsGateway {
     // Vérifier les permissions de rôle (tenant/global)
     const hasTenantRead = await this.userHasPermission(userId, organizationId, 'projects.task.read.tenant');
     const hasGlobalRead = await this.userHasPermission(userId, organizationId, 'projects.task.read.global');
-    
+
     if (hasGlobalRead) {
       // Pour global read, on join le room de l'organisation de la tâche
       const taskOrg = await this.organizationsRepo.manager.query(

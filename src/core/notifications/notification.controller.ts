@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Req,
   UnauthorizedException,
@@ -65,7 +66,7 @@ export class NotificationController {
     return { unreadCount };
   }
 
-  @Post(':id/read')
+  @Patch(':id/read')
   @UseGuards(PermissionGuard)
   @RequirePermission([], { moduleCode: 'core' })
   async markAsRead(@Req() req: any, @Param('id') notificationId: string) {

@@ -507,6 +507,7 @@ export class ProjectsLookupsController {
         p.priority,
         p.progress,
         p.planned_end_date AS "plannedEndDate",
+        p.description,
         COALESCE(o.name_code, o.name) AS "organizationLabel",
         (COALESCE(mu.first_name, '') || ' ' || COALESCE(mu.last_name, ''))::text AS "managerName",
         p.manager_id AS "managerId",
@@ -550,6 +551,7 @@ export class ProjectsLookupsController {
       priority: string | null;
       progress: number;
       plannedEndDate: string | null;
+      description: string | null;
       organizationLabel: string | null;
       managerName: string | null;
       managerId: string | null;
@@ -632,7 +634,7 @@ export class ProjectsLookupsController {
         `,
         [plannedEndDate, projectId.trim()],
       );
- 
+
       console.log('[updateProjectDeadline] result type:', typeof result, 'isArray:', Array.isArray(result));
       if (result) {
         console.log('[updateProjectDeadline] result keys:', Object.keys(result).slice(0, 5));
@@ -644,22 +646,22 @@ export class ProjectsLookupsController {
       const msg = String(e?.message ?? 'Update failed');
       throw new BadRequestException(msg);
     }
- 
+
     let rows: any[] = [];
- 
-    if (result && typeof result === 'object' && 'affectedRows' in result) { 
+
+    if (result && typeof result === 'object' && 'affectedRows' in result) {
       const affectedRows = (result as any).affectedRows;
-      if (affectedRows > 0) { 
+      if (affectedRows > 0) {
         return { ok: true };
       }
     }
 
-    if (Array.isArray(result)) { 
+    if (Array.isArray(result)) {
       if (Array.isArray(result[0]) && result.length === 1) {
         rows = result[0];
       } else if (result[0] && typeof result[0] === 'object' && !('affectedRows' in result[0])) {
         rows = result;
-      } else if (result.length > 0) {  
+      } else if (result.length > 0) {
         rows = result;
       }
     } else if (result?.rows && Array.isArray(result.rows)) {
@@ -667,7 +669,7 @@ export class ProjectsLookupsController {
     }
 
     const hasUpdated = rows.length > 0 && rows[0]?.id;
- 
+
     if (!hasUpdated) {
       const existsAfter = (await this.dataSource.query(
         `
@@ -679,7 +681,7 @@ export class ProjectsLookupsController {
         [projectId.trim()],
       )) as Array<{ ok?: number }>;
 
-      if (existsAfter?.[0]?.ok) { 
+      if (existsAfter?.[0]?.ok) {
         return { ok: true };
       }
       throw new BadRequestException('Project not found');
@@ -712,7 +714,7 @@ export class ProjectsLookupsController {
     if (!status || !validStatuses.includes(status)) {
       throw new BadRequestException(`Invalid status. Valid values: ${validStatuses.join(', ')}`);
     }
- 
+
     const access = (await this.dataSource.query(
       `
       SELECT 1 AS ok
@@ -738,7 +740,7 @@ export class ProjectsLookupsController {
     if (!access?.[0]?.ok) {
       throw new ForbiddenException('You do not have permission to update this project');
     }
- 
+
     const result = (await this.dataSource.query(
       `
       UPDATE module_b_projects.projects
@@ -754,7 +756,7 @@ export class ProjectsLookupsController {
     }
 
     const { name: projectName, organization_id: orgId } = result[0];
- 
+
     if (status === 'active') {
       await this.dataSource.query(
         `
@@ -765,7 +767,7 @@ export class ProjectsLookupsController {
         [projectId.trim()],
       );
     }
- 
+
     const members = (await this.dataSource.query(
       `
         SELECT DISTINCT user_id
@@ -781,7 +783,7 @@ export class ProjectsLookupsController {
         `,
       [projectId.trim()],
     )) as Array<{ user_id: string }>;
- 
+
     const admins = (await this.dataSource.query(
       `
         SELECT DISTINCT ur.user_id

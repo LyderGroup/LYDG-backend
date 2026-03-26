@@ -14,6 +14,7 @@ import { AuthModule } from "./core/auth/auth.module";
 import { ModulesModule } from './core/modules/modules.module';
 import { PilotageModule } from './core/pilotage/pilotage.module';
 import { ProjectsModule } from './core/projects/projects.module';
+import { HrModule } from './core/hr/hr.module';
 
 @Module({
   imports: [
@@ -105,6 +106,7 @@ import { ProjectsModule } from './core/projects/projects.module';
     ModulesModule,
     PilotageModule,
     ProjectsModule,
+    HrModule,
     RbacModule,
     AuthModule,
   ],

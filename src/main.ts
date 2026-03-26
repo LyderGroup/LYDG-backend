@@ -4,14 +4,15 @@ import { FirebaseAuthGuard } from './core/auth/firebase-auth.guard';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const allowedOrigins = new Set<string>([
+  const allowedOrigins = new Set<string>([ 
     'http://localhost:5173',
     'http://localhost:3000',
-    'https://lydg.vercel.app',
+    'https://d374g4eal07wq4.cloudfront.net',
+    'https://d2si3vxqzpi31z.cloudfront.net',
   ]);
 
   app.enableCors({
-    origin: (origin, callback) => { 
+    origin: (origin, callback) => {
       if (!origin) {
         return callback(null, true);
       }

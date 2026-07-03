@@ -12,6 +12,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { IsString, IsOptional, IsNumber, IsBoolean, IsEnum, IsUUID, IsDateString, IsInt } from 'class-validator';
 import { RolesGuard } from '../rbac/roles.guard';
 import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
@@ -19,59 +20,152 @@ import { ProjectsService, type ControlTowerBucket } from './projects.service';
 import { WorkflowValidationService } from './workflow-validation.service';
 import { TaskDependencyService } from './task-dependency.service';
 
+import { PROJECT_PERMISSIONS, allScopesOf } from './project.permissions';
 class CreateTaskDto {
+  @IsUUID()
   projectId!: string;
+
+  @IsString()
   title!: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsUUID()
+  @IsOptional()
   assigneeId?: string | null;
+
+  @IsUUID()
+  @IsOptional()
   reporterId?: string | null;
+
+  @IsDateString()
+  @IsOptional()
   startDate?: string | null;
+
+  @IsDateString()
+  @IsOptional()
   dueDate?: string | null;
+
+  @IsString()
+  @IsOptional()
   priority?: string;
+
+  @IsString()
+  @IsOptional()
   status?: string;
+
+  @IsInt()
+  @IsOptional()
   progress?: number;
 }
 
 class UpdateTaskDto {
+  @IsString()
+  @IsOptional()
   title?: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsUUID()
+  @IsOptional()
   assigneeId?: string | null;
+
+  @IsUUID()
+  @IsOptional()
   reporterId?: string | null;
+
+  @IsDateString()
+  @IsOptional()
   startDate?: string | null;
+
+  @IsDateString()
+  @IsOptional()
   dueDate?: string | null;
+
+  @IsString()
+  @IsOptional()
   priority?: string;
+
+  @IsString()
+  @IsOptional()
   status?: string;
+
+  @IsInt()
+  @IsOptional()
   progress?: number;
 }
 
 class CreateSubtaskDto {
+  @IsString()
   title!: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsDateString()
+  @IsOptional()
   dueDate?: string | null;
+
+  @IsInt()
+  @IsOptional()
   position?: number;
 }
 
 class UpdateSubtaskDto {
+  @IsString()
+  @IsOptional()
   title?: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsDateString()
+  @IsOptional()
   dueDate?: string | null;
+
+  @IsInt()
+  @IsOptional()
   position?: number;
+
+  @IsBoolean()
+  @IsOptional()
   isCompleted?: boolean;
 }
 
 class CreateTaskCommentDto {
+  @IsString()
   content!: string;
 }
 
 class AddTaskDependencyDto {
+  @IsUUID()
   dependsOnTaskId!: string;
+
+  @IsString()
+  @IsOptional()
   dependencyType?: string;
+
+  @IsInt()
+  @IsOptional()
   lagDays?: number;
 }
 
 class SubmitValidationDto {
+  @IsEnum(['approved', 'rejected'])
   decision!: 'approved' | 'rejected';
+
+  @IsString()
+  @IsOptional()
   comment?: string;
+
+  @IsString()
+  @IsOptional()
   rejectedReason?: string;
 }
 
@@ -82,19 +176,14 @@ export class TasksController {
     private readonly projectsService: ProjectsService,
     private readonly workflowValidationService: WorkflowValidationService,
     private readonly taskDependencyService: TaskDependencyService,
-  ) {}
+  ) { }
 
   @Get('control-tower')
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.control_tower.tenant',
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.CONTROL_TOWER),
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -117,9 +206,9 @@ export class TasksController {
 
     const bucket =
       bucketRaw === 'overdue' ||
-      bucketRaw === 'pending_validation' ||
-      bucketRaw === 'in_progress' ||
-      bucketRaw === 'completed'
+        bucketRaw === 'pending_validation' ||
+        bucketRaw === 'in_progress' ||
+        bucketRaw === 'completed'
         ? (bucketRaw as ControlTowerBucket)
         : undefined;
 
@@ -130,9 +219,9 @@ export class TasksController {
 
     const organizationIds = orgIdsRaw
       ? orgIdsRaw
-          .split(',')
-          .map((x: string) => x.trim())
-          .filter(Boolean)
+        .split(',')
+        .map((x: string) => x.trim())
+        .filter(Boolean)
       : undefined;
 
     const takeRaw = typeof query.take === 'string' ? Number(query.take) : undefined;
@@ -208,7 +297,10 @@ export class TasksController {
 
   @Post()
   @UseGuards(PermissionGuard)
-  @RequirePermission(['projects.task.create.project', 'projects.task.create.tenant'], {
+  @RequirePermission([
+      PROJECT_PERMISSIONS.TASK.CREATE.PROJECT,
+      PROJECT_PERMISSIONS.TASK.CREATE.TENANT,
+    ], {
     moduleCode: 'module_b_projects',
   })
   async createTask(@Req() req: any, @Body() dto: CreateTaskDto) {
@@ -234,14 +326,7 @@ export class TasksController {
   @Patch(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
     { moduleCode: 'module_b_projects' },
   )
   async updateTask(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateTaskDto) {
@@ -268,12 +353,7 @@ export class TasksController {
   @Delete(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.delete.own',
-      'projects.task.delete.project',
-      'projects.task.delete.tenant',
-      'projects.task.delete.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.DELETE),
     { moduleCode: 'module_b_projects' },
   )
   async deleteTask(@Req() req: any, @Param('id') id: string) {
@@ -301,13 +381,7 @@ export class TasksController {
   @Post(':id/validate')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.validate.project',
-      'projects.task.validate.team',
-      'projects.task.validate.department',
-      'projects.task.validate.tenant',
-      'projects.task.validate.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.VALIDATE),
     { moduleCode: 'module_b_projects' },
   )
   async validateTask(@Req() req: any, @Param('id') id: string) {
@@ -332,7 +406,7 @@ export class TasksController {
 
   @Get('control-tower/export')
   @UseGuards(PermissionGuard)
-  @RequirePermission('projects.task.export.tenant', { moduleCode: 'module_b_projects' })
+  @RequirePermission(PROJECT_PERMISSIONS.TASK.EXPORT.TENANT, { moduleCode: 'module_b_projects' })
   async exportControlTower(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -351,9 +425,9 @@ export class TasksController {
 
     const bucket =
       bucketRaw === 'overdue' ||
-      bucketRaw === 'pending_validation' ||
-      bucketRaw === 'in_progress' ||
-      bucketRaw === 'completed'
+        bucketRaw === 'pending_validation' ||
+        bucketRaw === 'in_progress' ||
+        bucketRaw === 'completed'
         ? (bucketRaw as ControlTowerBucket)
         : undefined;
 
@@ -364,9 +438,9 @@ export class TasksController {
 
     const organizationIds = orgIdsRaw
       ? orgIdsRaw
-          .split(',')
-          .map((x: string) => x.trim())
-          .filter(Boolean)
+        .split(',')
+        .map((x: string) => x.trim())
+        .filter(Boolean)
       : undefined;
 
     return this.projectsService.exportControlTowerCsv({
@@ -381,14 +455,7 @@ export class TasksController {
   @Get(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async getOne(@Req() req: any, @Param('id') id: string) {
@@ -414,14 +481,7 @@ export class TasksController {
   @Get(':id/comments')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async listComments(@Req() req: any, @Param('id') id: string) {
@@ -447,14 +507,7 @@ export class TasksController {
   @Post(':id/comments')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async createComment(@Req() req: any, @Param('id') id: string, @Body() dto: CreateTaskCommentDto) {
@@ -481,14 +534,7 @@ export class TasksController {
   @Get(':id/subtasks')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async listSubtasks(@Req() req: any, @Param('id') taskId: string) {
@@ -515,21 +561,12 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.create.project',
-      'projects.task.create.tenant',
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
-      'projects.task.delete.own',
-      'projects.task.delete.project',
-      'projects.task.delete.tenant',
-      'projects.task.delete.global',
-      'projects.task.read.project',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.CREATE),
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.DELETE),
+      PROJECT_PERMISSIONS.TASK.READ.PROJECT,
+      PROJECT_PERMISSIONS.TASK.READ.TENANT,
+      PROJECT_PERMISSIONS.TASK.READ.GLOBAL,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -557,14 +594,7 @@ export class TasksController {
   @Patch('subtasks/:subtaskId')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
     { moduleCode: 'module_b_projects' },
   )
   async updateSubtask(
@@ -596,16 +626,8 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
-      'projects.task.delete.own',
-      'projects.task.delete.project',
-      'projects.task.delete.tenant',
-      'projects.task.delete.global',
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.DELETE),
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -632,14 +654,7 @@ export class TasksController {
   @Post(':id/workflow/next')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
     { moduleCode: 'module_b_projects' },
   )
   async moveTaskToNextWorkflowStep(@Req() req: any, @Param('id') taskId: string) {
@@ -665,14 +680,7 @@ export class TasksController {
   @Get(':id/workflow')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.project',
-      'projects.task.read.own',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async getTaskWorkflow(@Req() req: any, @Param('id') taskId: string) {
@@ -698,14 +706,7 @@ export class TasksController {
   @Get(':id/dependencies')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.project',
-      'projects.task.read.own',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async listTaskDependencies(@Req() req: any, @Param('id') taskId: string) {
@@ -732,18 +733,8 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.read.project',
-      'projects.task.read.own',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -778,18 +769,8 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.read.project',
-      'projects.task.read.own',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
+      ...allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -830,9 +811,9 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.validate.project',
-      'projects.task.validate.tenant',
-      'projects.task.validate.global',
+      PROJECT_PERMISSIONS.TASK.VALIDATE.PROJECT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.TENANT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.GLOBAL,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -870,14 +851,7 @@ export class TasksController {
   @Get(':id/workflow/validations')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.project',
-      'projects.task.read.own',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async getTaskWorkflowValidations(@Req() req: any, @Param('id') taskId: string) {
@@ -901,16 +875,16 @@ export class TasksController {
       taskId,
     );
   }
- 
+
 
   @Post(':id/workflow/request-validation')
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.update.own',
-      'projects.task.update.project',
+      PROJECT_PERMISSIONS.TASK.READ.OWN,
+      PROJECT_PERMISSIONS.TASK.READ.PROJECT,
+      PROJECT_PERMISSIONS.TASK.UPDATE.OWN,
+      PROJECT_PERMISSIONS.TASK.UPDATE.PROJECT,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -944,13 +918,7 @@ export class TasksController {
   @Get('validation-requests/pending')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.validate.project',
-      'projects.task.validate.tenant',
-      'projects.task.validate.global',
-      'projects.task.read.own',
-      'projects.task.read.project',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.VALIDATE),
     { moduleCode: 'module_b_projects' },
   )
   async getPendingValidationRequests(@Req() req: any) {
@@ -976,9 +944,9 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.validate.project',
-      'projects.task.validate.tenant',
-      'projects.task.validate.global',
+      PROJECT_PERMISSIONS.TASK.VALIDATE.PROJECT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.TENANT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.GLOBAL,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -1013,9 +981,9 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.validate.project',
-      'projects.task.validate.tenant',
-      'projects.task.validate.global',
+      PROJECT_PERMISSIONS.TASK.VALIDATE.PROJECT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.TENANT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.GLOBAL,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -1052,9 +1020,9 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.validate.project',
-      'projects.task.validate.tenant',
-      'projects.task.validate.global',
+      PROJECT_PERMISSIONS.TASK.VALIDATE.PROJECT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.TENANT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.GLOBAL,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -1089,9 +1057,9 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.validate.project',
-      'projects.task.validate.tenant',
-      'projects.task.validate.global',
+      PROJECT_PERMISSIONS.TASK.VALIDATE.PROJECT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.TENANT,
+      PROJECT_PERMISSIONS.TASK.VALIDATE.GLOBAL,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -1128,9 +1096,9 @@ export class TasksController {
   @UseGuards(PermissionGuard)
   @RequirePermission(
     [
-      'projects.task.read.project',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
+      PROJECT_PERMISSIONS.TASK.READ.PROJECT,
+      PROJECT_PERMISSIONS.TASK.READ.TENANT,
+      PROJECT_PERMISSIONS.TASK.READ.GLOBAL,
     ],
     { moduleCode: 'module_b_projects' },
   )
@@ -1154,14 +1122,7 @@ export class TasksController {
   @Patch(':id/assignee')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.write.own',
-      'projects.task.write.project',
-      'projects.task.write.team',
-      'projects.task.write.department',
-      'projects.task.write.tenant',
-      'projects.task.write.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.WRITE),
     { moduleCode: 'module_b_projects' },
   )
   async updateTaskAssignee(

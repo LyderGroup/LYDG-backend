@@ -24,7 +24,7 @@ export class NotificationsRealtimeService implements OnModuleInit {
     userId: string;
     notification: {
       id: string;
-      type: string;
+      type?: string;
       title: string;
       message?: string | null;
       data?: Record<string, any> | null;

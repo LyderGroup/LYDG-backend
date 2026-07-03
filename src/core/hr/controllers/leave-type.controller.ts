@@ -10,60 +10,62 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator';
 import { LeaveTypeService } from '../services/leave-type.service';
-import { RolesGuard } from '../../rbac/roles.guard';
-import { Roles } from '../../rbac/roles.decorator';
+import { PermissionGuard } from '../../rbac/permission.guard';
+import { RequirePermission } from '../../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr.permissions';
 
 class CreateLeaveTypeDto {
-  name!: string;
-  code!: string;
-  description?: string | null;
-  daysPerYear!: number;
-  accrualMethod?: string;
-  maxCarryOver?: number;
-  isPaid?: boolean;
-  requiresApproval?: boolean;
-  minDurationDays?: number;
-  maxDurationDays?: number | null;
-  advanceNoticeDays?: number;
-  color?: string;
-  icon?: string | null;
-  displayOrder?: number;
-  isActive?: boolean;
+  @IsString() name!: string;
+  @IsString() code!: string;
+  @IsOptional() @IsString() description?: string | null;
+  @IsNumber() daysPerYear!: number;
+  @IsOptional() @IsString() accrualMethod?: string;
+  @IsOptional() @IsNumber() maxCarryOver?: number;
+  @IsOptional() @IsBoolean() isPaid?: boolean;
+  @IsOptional() @IsBoolean() requiresApproval?: boolean;
+  @IsOptional() @IsNumber() minDurationDays?: number;
+  @IsOptional() @IsNumber() maxDurationDays?: number | null;
+  @IsOptional() @IsNumber() advanceNoticeDays?: number;
+  @IsOptional() @IsString() color?: string;
+  @IsOptional() @IsString() icon?: string | null;
+  @IsOptional() @IsNumber() displayOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 class UpdateLeaveTypeDto {
-  name?: string;
-  code?: string;
-  description?: string | null;
-  daysPerYear?: number;
-  accrualMethod?: string;
-  maxCarryOver?: number;
-  isPaid?: boolean;
-  requiresApproval?: boolean;
-  minDurationDays?: number;
-  maxDurationDays?: number | null;
-  advanceNoticeDays?: number;
-  color?: string;
-  icon?: string | null;
-  displayOrder?: number;
-  isActive?: boolean;
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsString() description?: string | null;
+  @IsOptional() @IsNumber() daysPerYear?: number;
+  @IsOptional() @IsString() accrualMethod?: string;
+  @IsOptional() @IsNumber() maxCarryOver?: number;
+  @IsOptional() @IsBoolean() isPaid?: boolean;
+  @IsOptional() @IsBoolean() requiresApproval?: boolean;
+  @IsOptional() @IsNumber() minDurationDays?: number;
+  @IsOptional() @IsNumber() maxDurationDays?: number | null;
+  @IsOptional() @IsNumber() advanceNoticeDays?: number;
+  @IsOptional() @IsString() color?: string;
+  @IsOptional() @IsString() icon?: string | null;
+  @IsOptional() @IsNumber() displayOrder?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/hr/leave-types')
 export class LeaveTypeController {
-  constructor(private readonly service: LeaveTypeService) {}
+  constructor(private readonly service: LeaveTypeService) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT', 'EMPLOYEE')
+  @RequirePermission([HR_PERMISSIONS.HR_LEAVE_READ_OWN, HR_PERMISSIONS.HR_LEAVE_READ_ALL], { moduleCode: 'module_c_rh' })
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.findAll(tenant?.id as string);
   }
 
   @Get(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission([HR_PERMISSIONS.HR_LEAVE_READ_OWN, HR_PERMISSIONS.HR_LEAVE_READ_ALL], { moduleCode: 'module_c_rh' })
   async findOne(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const item = await this.service.findOne(tenant?.id as string, id);
@@ -72,7 +74,7 @@ export class LeaveTypeController {
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_SETTINGS_WRITE, { moduleCode: 'module_c_rh' })
   async create(@Req() req: any, @Body() dto: CreateLeaveTypeDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     if (!dto.name?.trim()) throw new BadRequestException('Le nom est obligatoire');
@@ -101,14 +103,14 @@ export class LeaveTypeController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_SETTINGS_WRITE, { moduleCode: 'module_c_rh' })
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateLeaveTypeDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.update(tenant?.id as string, id, dto);
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(HR_PERMISSIONS.HR_SETTINGS_WRITE, { moduleCode: 'module_c_rh' })
   async delete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.delete(tenant?.id as string, id);

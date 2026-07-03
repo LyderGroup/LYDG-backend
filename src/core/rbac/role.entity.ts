@@ -46,9 +46,6 @@ export class Role {
   @Column({ type: 'int', name: 'role_level', default: 1 })
   roleLevel!: number;
 
-  @Column({ type: 'boolean', name: 'is_system_role', default: false })
-  isSystemRole!: boolean;
-
   @Column({ type: 'boolean', name: 'is_default', default: false })
   isDefault!: boolean;
 

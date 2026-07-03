@@ -32,7 +32,7 @@ export class PermissionsController {
   constructor(
     @InjectRepository(Permission)
     private readonly permissionsRepo: Repository<Permission>,
-  ) {}
+  ) { }
 
   @Get()
   async findAll() {

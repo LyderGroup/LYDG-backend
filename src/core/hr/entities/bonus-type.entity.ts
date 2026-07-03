@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Organization } from '../../organizations/organizations.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type BonusCategory = 'PERFORMANCE' | 'EXCEPTIONAL' | 'RETENTION' | 'CERTIFICATION' | 'TERRAIN' | 'OTHER';
 
 @Entity({ schema: 'module_c_rh', name: 'bonus_types' })
@@ -39,7 +40,8 @@ export class BonusType {
   category!: BonusCategory | null;
 
   // Montant
-  @Column({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, nullable: true })
   amount!: number | null;
 
   @Column({ type: 'varchar', length: 3, default: 'XOF' })
@@ -50,6 +52,7 @@ export class BonusType {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'percentage_value',

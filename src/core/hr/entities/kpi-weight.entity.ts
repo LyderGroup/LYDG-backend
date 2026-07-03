@@ -9,6 +9,7 @@ import {
 import { Organization } from '../../organizations/organizations.entity';
 import { Kpi } from './kpi.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_c_rh', name: 'kpi_weights' })
 export class KpiWeight {
   @PrimaryGeneratedColumn('uuid')
@@ -33,6 +34,7 @@ export class KpiWeight {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'weight_percent',

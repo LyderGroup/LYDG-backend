@@ -9,12 +9,17 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { IsString, MinLength, MaxLength } from 'class-validator';
 import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { RolesGuard } from '../rbac/roles.guard';
 import { ProjectsService } from './projects.service';
+import { PROJECT_PERMISSIONS, allScopesOf } from './project.permissions';
 
 class CreateProjectCommentDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(5000)
   content!: string;
 }
 
@@ -26,14 +31,7 @@ export class ProjectCommentsController {
   @Get(':id/comments')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.TASK.READ),
     { moduleCode: 'module_b_projects' },
   )
   async listComments(@Req() req: any, @Param('id') projectId: string) {
@@ -59,14 +57,7 @@ export class ProjectCommentsController {
   @Post(':id/comments')
   @UseGuards(PermissionGuard)
   @RequirePermission(
-    [
-      'projects.task.read.own',
-      'projects.task.read.project',
-      'projects.task.read.team',
-      'projects.task.read.department',
-      'projects.task.read.tenant',
-      'projects.task.read.global',
-    ],
+    allScopesOf(PROJECT_PERMISSIONS.COMMENT.WRITE),
     { moduleCode: 'module_b_projects' },
   )
   async createComment(

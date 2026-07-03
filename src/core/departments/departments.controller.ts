@@ -10,37 +10,66 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsString, IsOptional, IsBoolean, IsEnum, IsArray, IsUUID } from 'class-validator';
 import { DepartmentsService } from './departments.service';
-import { RolesGuard } from '../rbac/roles.guard';
-import { Roles } from '../rbac/roles.decorator';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { RequirePermission } from '../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr/hr.permissions';
+import { SYSTEM_PERMISSIONS } from '../global/global.permissions';
 
 class CreateDepartmentDto {
+  @IsString()
   name!: string;
+
+  @IsString()
   code!: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsUUID()
+  @IsOptional()
   parentDepartmentId?: string | null;
 }
 
 class UpdateDepartmentDto {
+  @IsString()
+  @IsOptional()
   name?: string;
+
+  @IsString()
+  @IsOptional()
   code?: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsUUID()
+  @IsOptional()
   parentDepartmentId?: string | null;
+
+  @IsBoolean()
+  @IsOptional()
   isActive?: boolean;
 }
 
 class BulkDepartmentActionDto {
+  @IsEnum(['soft-delete', 'restore', 'activate', 'deactivate'])
   action!: 'soft-delete' | 'restore' | 'activate' | 'deactivate';
+
+  @IsArray()
+  @IsString({ each: true })
   ids!: string[];
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/departments')
 export class DepartmentsController {
-  constructor(private readonly departmentsService: DepartmentsService) {}
+  constructor(private readonly departmentsService: DepartmentsService) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const query = req.query ?? {};
@@ -65,7 +94,7 @@ export class DepartmentsController {
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_WRITE_OWN)
   async create(@Req() req: any, @Body() dto: CreateDepartmentDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -90,7 +119,7 @@ export class DepartmentsController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_WRITE_OWN)
   async update(
     @Req() req: any,
     @Param('id') id: string,
@@ -114,7 +143,7 @@ export class DepartmentsController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_WRITE_OWN)
   async softDelete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -129,7 +158,7 @@ export class DepartmentsController {
   }
 
   @Post(':id/restore')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_WRITE_OWN)
   async restore(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -144,7 +173,7 @@ export class DepartmentsController {
   }
 
   @Delete(':id/hard')
-  @Roles('SUPER_ADMIN')
+  @RequirePermission(SYSTEM_PERMISSIONS.SYSTEM_ADMIN)
   async hardDelete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
 
@@ -157,7 +186,7 @@ export class DepartmentsController {
   }
 
   @Post('bulk')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_WRITE_OWN)
   async bulk(@Req() req: any, @Body() dto: BulkDepartmentActionDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;

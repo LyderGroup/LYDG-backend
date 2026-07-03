@@ -62,4 +62,15 @@ export class TaskWorkflowValidation {
 
   @Column({ type: 'timestamp', name: 'validated_at', nullable: true })
   validatedAt!: Date | null;
+
+  // ─── Soft-delete (Sprint B) ───────────────────────────────────────
+  @Column({ type: 'timestamp', name: 'deleted_at', nullable: true })
+  deletedAt!: Date | null;
+
+  @Column({ type: 'uuid', name: 'deleted_by', nullable: true })
+  deletedBy!: string | null;
+
+  @Column({ type: 'text', name: 'deletion_reason', nullable: true })
+  deletionReason!: string | null;
+
 }

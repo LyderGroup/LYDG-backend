@@ -9,8 +9,9 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { RolesGuard } from '../rbac/roles.guard';
-import { Roles, SYSTEM_ROLE } from '../rbac/roles.decorator';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { RequirePermission } from '../rbac/require-permission.decorator';
+import { PILOTAGE_MODULE_CODE, PILOTAGE_PERMISSIONS } from './pilotage.permissions';
 import { PilotageService } from './pilotage.service';
 
 class CreateKpiValueDto {
@@ -23,12 +24,13 @@ class CreateKpiValueDto {
   notes?: string | null;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/pilotage/kpi-values')
 export class KpiValuesController {
-  constructor(private readonly pilotageService: PilotageService) {}
+  constructor(private readonly pilotageService: PilotageService) { }
 
   @Get()
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_KPI_VALUES_READ, { moduleCode: PILOTAGE_MODULE_CODE })
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const query = req.query ?? {};
@@ -56,7 +58,7 @@ export class KpiValuesController {
   }
 
   @Post()
-  @Roles(SYSTEM_ROLE)
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_KPI_VALUES_CREATE, { moduleCode: PILOTAGE_MODULE_CODE })
   async create(@Req() req: any, @Body() dto: CreateKpiValueDto) {
     const tenant = req.tenant as { id?: string } | undefined;
 
@@ -77,7 +79,7 @@ export class KpiValuesController {
   }
 
   @Delete(':id')
-  @Roles(SYSTEM_ROLE)
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_KPI_VALUES_DELETE, { moduleCode: PILOTAGE_MODULE_CODE })
   async remove(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.deleteKpiValueForTenant(tenant?.id as string, id);

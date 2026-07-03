@@ -8,21 +8,25 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { RolesGuard } from '../rbac/roles.guard';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { RequirePermission } from '../rbac/require-permission.decorator';
+import { PILOTAGE_MODULE_CODE, PILOTAGE_PERMISSIONS } from './pilotage.permissions';
 import { PilotageService } from './pilotage.service';
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/pilotage/reports')
 export class PilotageReportsController {
   constructor(private readonly pilotageService: PilotageService) {}
 
   @Get('exports')
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_REPORTS_READ, { moduleCode: PILOTAGE_MODULE_CODE })
   async listExports(@Req() req: any): Promise<any> {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.listReportExportsForTenant(tenant?.id as string);
   }
 
   @Post('export')
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_REPORTS_EXPORT, { moduleCode: PILOTAGE_MODULE_CODE })
   async exportReport(@Req() req: any, @Res() res: Response): Promise<void> {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;

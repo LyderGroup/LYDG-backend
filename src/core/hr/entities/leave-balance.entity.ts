@@ -10,6 +10,7 @@ import {
 import { Employee } from '../employee.entity';
 import { LeaveType } from './leave-type.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_c_rh', name: 'leave_balances' })
 export class LeaveBalance {
   @PrimaryGeneratedColumn('uuid')
@@ -34,6 +35,7 @@ export class LeaveBalance {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 1,
     name: 'entitled_days',
@@ -43,6 +45,7 @@ export class LeaveBalance {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 1,
     name: 'accrued_days',
@@ -52,6 +55,7 @@ export class LeaveBalance {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 1,
     name: 'taken_days',
@@ -61,6 +65,7 @@ export class LeaveBalance {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 1,
     name: 'carried_over_days',

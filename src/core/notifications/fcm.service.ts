@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { In, Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
 import { FcmToken } from './fcm-token.entity';
@@ -67,14 +68,34 @@ export class FcmService {
     token: string,
     deviceType?: string,
     device_id?: string,
-  ): Promise<FcmToken> { 
+  ): Promise<FcmToken> {
+    // Désactivation #1 : par device_id stable côté localStorage.
+    // Limite : si l'utilisateur a "Clear site data", le deviceId est perdu
+    // → ce match échoue → on retombe sur la désactivation #2 (par IID).
     if (device_id) {
       await this.fcmTokenRepo.update(
         { userId, device_id },
         { isActive: false },
       );
     }
- 
+
+    // Désactivation #2 : par "IID" (Instance ID) Firebase = ce qui précède
+    // le `:` dans le token. C'est l'identifiant stable du navigateur côté
+    // Firebase Messaging. Quand Firebase fait une rotation du token (même
+    // browser, nouveau hash APA91), l'IID reste identique → on peut
+    // désactiver tous les anciens tokens du même browser pour ce user.
+    const iid = token.includes(':') ? token.split(':')[0] : '';
+    if (iid) {
+      await this.fcmTokenRepo
+        .createQueryBuilder()
+        .update(FcmToken)
+        .set({ isActive: false })
+        .where('user_id = :userId', { userId })
+        .andWhere('token LIKE :prefix', { prefix: `${iid}:%` })
+        .andWhere('token <> :token', { token })
+        .execute();
+    }
+
     const existing = await this.fcmTokenRepo.findOne({
       where: { userId, token },
     });
@@ -131,13 +152,19 @@ export class FcmService {
     }
 
     try {
+      // ⚠️ Web Push: on envoie DATA-ONLY (pas de champ `notification`).
+      // Sinon Chrome affiche automatiquement et ignore le service worker,
+      // ce qui empêche le design custom + le routing au clic.
+      // Le SW (firebase-messaging-sw.js) lit `data.title` / `data.body`
+      // et appelle showNotification() avec notre design.
       await admin.messaging().send({
         token: message.token,
-        notification: {
+        data: {
           title: message.title,
           body: message.body,
+          ...(message.data ?? {}),
         },
-        data: message.data ?? {},
+        webpush: { headers: { Urgency: 'high' } },
       });
       return true;
     } catch (error: any) {
@@ -167,13 +194,17 @@ export class FcmService {
     }
 
     try {
+      // ⚠️ Web Push: voir commentaire dans sendToOne — data-only obligatoire
+      // pour que le service worker prenne la main et affiche la notif avec
+      // notre design custom + routing au clic.
       const response = await admin.messaging().sendEachForMulticast({
         tokens: message.tokens,
-        notification: {
+        data: {
           title: message.title,
           body: message.body,
+          ...(message.data ?? {}),
         },
-        data: message.data ?? {},
+        webpush: { headers: { Urgency: 'high' } },
       });
 
       // Désactiver les tokens invalides
@@ -211,17 +242,31 @@ export class FcmService {
     body: string,
     data?: Record<string, string>,
   ): Promise<number> {
-    const tokens = await this.getTokensForUser(userId);
-    if (tokens.length === 0) {
+    if (!this.app) {
+      this.logger.warn(
+        `[FCM] Firebase Admin non initialisé → push ignoré pour user=${userId} ("${title}")`,
+      );
       return 0;
     }
 
-    return this.sendToMany({
-      tokens,
-      title,
-      body,
-      data,
-    });
+    const tokens = await this.getTokensForUser(userId);
+    if (tokens.length === 0) {
+      this.logger.warn(
+        `[FCM] Aucun token actif pour user=${userId} → push ignoré ("${title}"). ` +
+        `L'utilisateur doit se connecter au front au moins une fois et accepter ` +
+        `la permission notifications.`,
+      );
+      return 0;
+    }
+
+    this.logger.log(
+      `[FCM] Envoi à user=${userId} sur ${tokens.length} token(s) — "${title}"`,
+    );
+    const count = await this.sendToMany({ tokens, title, body, data });
+    this.logger.log(
+      `[FCM] Résultat user=${userId} : ${count}/${tokens.length} push envoyés`,
+    );
+    return count;
   }
 
   /**
@@ -260,16 +305,25 @@ export class FcmService {
 
   /**
    * Supprime les tokens inactifs depuis plus de 30 jours.
+   * Tourne chaque jour à 3h du matin pour éviter d'accumuler des lignes
+   * mortes après les rotations Firebase et les "Clear site data".
    */
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
   async cleanOldTokens(): Promise<void> {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    await this.fcmTokenRepo
+    const result = await this.fcmTokenRepo
       .createQueryBuilder()
       .delete()
-      .where('isActive = false')
-      .andWhere('updatedAt < :date', { date: thirtyDaysAgo })
+      .where('is_active = false')
+      .andWhere('updated_at < :date', { date: thirtyDaysAgo })
       .execute();
+
+    if (result.affected && result.affected > 0) {
+      this.logger.log(
+        `[FCM] cleanOldTokens: ${result.affected} token(s) inactif(s) > 30j supprimé(s)`,
+      );
+    }
   }
 }

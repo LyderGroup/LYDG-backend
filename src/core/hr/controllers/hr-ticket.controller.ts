@@ -11,24 +11,26 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { HrTicketService } from '../services/hr-ticket.service';
-import { RolesGuard } from '../../rbac/roles.guard';
-import { Roles } from '../../rbac/roles.decorator';
+import { PermissionGuard } from '../../rbac/permission.guard';
+import { RequirePermission } from '../../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr.permissions';
 import { TicketStatus } from '../entities/hr-ticket.entity';
 
 @Controller('core/hr/tickets')
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 export class HrTicketController {
   constructor(private readonly ticketService: HrTicketService) { }
- 
+
 
   @Get('categories')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_OWN, { moduleCode: 'module_c_rh' })
   async listCategories(@Req() req: any) {
     const organizationId = req.user.organizationId;
     return this.ticketService.listCategories(organizationId);
   }
 
   @Post('categories')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_SETTINGS_WRITE, { moduleCode: 'module_c_rh' })
   async createCategory(
     @Req() req: any,
     @Body() body: {
@@ -44,9 +46,10 @@ export class HrTicketController {
     const organizationId = req.user.organizationId;
     return this.ticketService.createCategory(organizationId, body);
   }
- 
+
 
   @Post()
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_WRITE, { moduleCode: 'module_c_rh' })
   async createTicket(
     @Req() req: any,
     @Body() body: {
@@ -68,6 +71,7 @@ export class HrTicketController {
   }
 
   @Get('my')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_OWN, { moduleCode: 'module_c_rh' })
   async getMyTickets(@Req() req: any) {
     const employeeId = req.user.employeeId;
 
@@ -79,6 +83,7 @@ export class HrTicketController {
   }
 
   @Get('my/:id')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_OWN, { moduleCode: 'module_c_rh' })
   async getMyTicket(
     @Req() req: any,
     @Param('id') ticketId: string,
@@ -88,6 +93,7 @@ export class HrTicketController {
   }
 
   @Post('my/:id/rate')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_OWN, { moduleCode: 'module_c_rh' })
   async rateTicket(
     @Req() req: any,
     @Param('id') ticketId: string,
@@ -106,10 +112,10 @@ export class HrTicketController {
       body.comment,
     );
   }
- 
+
 
   @Get('all')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_ALL, { moduleCode: 'module_c_rh' })
   async listTickets(
     @Req() req: any,
     @Query('status') status?: string,
@@ -151,14 +157,14 @@ export class HrTicketController {
   }
 
   @Get('assigned')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_ALL, { moduleCode: 'module_c_rh' })
   async getAssignedTickets(@Req() req: any) {
     const userId = req.user.id;
     return this.ticketService.getAssignedTickets(userId);
   }
 
   @Get(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_ALL, { moduleCode: 'module_c_rh' })
   async getTicket(
     @Req() req: any,
     @Param('id') ticketId: string,
@@ -168,7 +174,7 @@ export class HrTicketController {
   }
 
   @Post(':id/assign')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_MANAGE, { moduleCode: 'module_c_rh' })
   async assignTicket(
     @Req() req: any,
     @Param('id') ticketId: string,
@@ -179,7 +185,7 @@ export class HrTicketController {
   }
 
   @Post(':id/status')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_MANAGE, { moduleCode: 'module_c_rh' })
   async updateStatus(
     @Req() req: any,
     @Param('id') ticketId: string,
@@ -195,7 +201,7 @@ export class HrTicketController {
   }
 
   @Post(':id/comments')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission([HR_PERMISSIONS.HR_TICKET_WRITE, HR_PERMISSIONS.HR_TICKET_MANAGE], { moduleCode: 'module_c_rh' })
   async addComment(
     @Req() req: any,
     @Param('id') ticketId: string,
@@ -204,10 +210,10 @@ export class HrTicketController {
     const userId = req.user.id;
     return this.ticketService.addComment(ticketId, userId, body);
   }
- 
+
 
   @Get('dashboard/stats')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_TICKET_READ_ALL, { moduleCode: 'module_c_rh' })
   async getDashboardStats(@Req() req: any) {
     const organizationId = req.user.organizationId;
     return this.ticketService.getDashboardStats(organizationId);

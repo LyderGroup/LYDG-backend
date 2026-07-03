@@ -12,6 +12,7 @@ import { Organization } from '../../organizations/organizations.entity';
 import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type EvaluationLevel = 'EXCELLENCE' | 'PERFORMANT' | 'ACCEPTABLE' | 'INSUFFISANT' | 'CRITIQUE';
 export type EvaluationStatus = 'draft' | 'submitted' | 'validated' | 'contested' | 'cancelled';
 
@@ -42,10 +43,12 @@ export class MonthlyEvaluation {
   periodYear!: number;
 
   // Scores
-  @Column({ type: 'decimal', precision: 5, scale: 2, name: 'total_score' })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 5, scale: 2, name: 'total_score' })
   totalScore!: number;
 
-  @Column({ type: 'decimal', precision: 5, scale: 2, name: 'weighted_score' })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 5, scale: 2, name: 'weighted_score' })
   weightedScore!: number;
 
   // Niveau
@@ -61,6 +64,7 @@ export class MonthlyEvaluation {
   // Prime de performance
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 15,
     scale: 2,
     name: 'performance_bonus',

@@ -41,20 +41,21 @@ export class PilotageService {
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(ReportExport)
     private readonly reportExportsRepo: Repository<ReportExport>,
-  ) {}
+  ) { }
 
   private async resolveAccessibleOrganizationIdsForUser(userId: string): Promise<string[]> {
     const userRoles = await this.userRolesRepo.find({
       where: { userId, isActive: true },
-      relations: ['role', 'role.organization'],
+      relations: ['role', 'role.organization', 'role.rolePermissions', 'role.rolePermissions.permission'],
       order: { assignedAt: 'DESC' },
     });
 
-    const hasSystemRole = userRoles.some(
-      (ur) => ur.role?.isSystemRole || ur.role?.code === 'SUPER_ADMIN',
+    // Plus de rôle système - vérifier la permission hr.organizations.read.all
+    const hasAllOrgsPermission = userRoles.some((ur) =>
+      ur.role?.rolePermissions?.some((rp: any) => rp.permission?.code === 'hr.organizations.read.all')
     );
 
-    if (hasSystemRole) {
+    if (hasAllOrgsPermission) {
       const orgs = await this.organizationsRepo.find({
         order: { createdAt: 'DESC' },
         take: 500,

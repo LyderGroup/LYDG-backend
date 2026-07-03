@@ -11,41 +11,43 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsEmail, IsNumber, IsOptional, IsString } from 'class-validator';
 import { CandidateService } from '../services/candidate.service';
 import { CandidateStatus } from '../entities/candidate.entity';
-import { RolesGuard } from '../../rbac/roles.guard';
-import { Roles } from '../../rbac/roles.decorator';
+import { PermissionGuard } from '../../rbac/permission.guard';
+import { RequirePermission } from '../../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr.permissions';
 
 class CreateCandidateDto {
-  firstName!: string;
-  lastName!: string;
-  email!: string;
-  phone?: string | null;
-  currentPosition?: string | null;
-  totalExperienceYears?: number | null;
-  source?: string | null;
-  resumeUrl?: string | null;
+  @IsString() firstName!: string;
+  @IsString() lastName!: string;
+  @IsEmail() email!: string;
+  @IsOptional() @IsString() phone?: string | null;
+  @IsOptional() @IsString() currentPosition?: string | null;
+  @IsOptional() @IsNumber() totalExperienceYears?: number | null;
+  @IsOptional() @IsString() source?: string | null;
+  @IsOptional() @IsString() resumeUrl?: string | null;
 }
 
 class UpdateCandidateDto {
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  phone?: string | null;
-  currentPosition?: string | null;
-  totalExperienceYears?: number | null;
-  source?: string | null;
-  resumeUrl?: string | null;
-  status?: string;
+  @IsOptional() @IsString() firstName?: string;
+  @IsOptional() @IsString() lastName?: string;
+  @IsOptional() @IsEmail() email?: string;
+  @IsOptional() @IsString() phone?: string | null;
+  @IsOptional() @IsString() currentPosition?: string | null;
+  @IsOptional() @IsNumber() totalExperienceYears?: number | null;
+  @IsOptional() @IsString() source?: string | null;
+  @IsOptional() @IsString() resumeUrl?: string | null;
+  @IsOptional() @IsString() status?: string;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/hr/candidates')
 export class CandidateController {
   constructor(private readonly service: CandidateService) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_READ, { moduleCode: 'module_c_rh' })
   async list(@Req() req: any, @Query() query: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const page = query.page ? parseInt(query.page as string, 10) : undefined;
@@ -57,7 +59,7 @@ export class CandidateController {
   }
 
   @Get(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_READ, { moduleCode: 'module_c_rh' })
   async findOne(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const item = await this.service.findOne(tenant?.id as string, id);
@@ -66,7 +68,7 @@ export class CandidateController {
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_WRITE, { moduleCode: 'module_c_rh' })
   async create(@Req() req: any, @Body() dto: CreateCandidateDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     if (!dto.firstName?.trim()) throw new BadRequestException('Le prénom est obligatoire');
@@ -86,7 +88,7 @@ export class CandidateController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_WRITE, { moduleCode: 'module_c_rh' })
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateCandidateDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.update(tenant?.id as string, id, {
@@ -96,7 +98,7 @@ export class CandidateController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_MANAGE, { moduleCode: 'module_c_rh' })
   async delete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.delete(tenant?.id as string, id);

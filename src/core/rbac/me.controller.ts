@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { UserRole } from './user-role.entity';
 import { Organization } from '../organizations/organizations.entity';
+import { Employee } from '../hr/employee.entity';
 
 @Controller('me')
 export class MeController {
@@ -11,7 +12,9 @@ export class MeController {
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
-  ) {}
+    @InjectRepository(Employee)
+    private readonly employeeRepo: Repository<Employee>,
+  ) { }
 
   @Get('organizations')
   async getOrganizations(@Req() req: any) {
@@ -23,15 +26,16 @@ export class MeController {
 
     const userRoles = await this.userRolesRepo.find({
       where: { userId: currentUser.id, isActive: true },
-      relations: ['role', 'role.organization'],
+      relations: ['role', 'role.organization', 'role.rolePermissions', 'role.rolePermissions.permission'],
       order: { assignedAt: 'DESC' },
     });
 
-    const hasSystemRole = userRoles.some(
-      (ur) => ur.role?.isSystemRole || ur.role?.code === 'SUPER_ADMIN',
+    // Plus de rôle système - vérifier la permission hr.organizations.read.all
+    const hasAllOrgsPermission = userRoles.some((ur) =>
+      ur.role?.rolePermissions?.some((rp: any) => rp.permission?.code === 'hr.organizations.read.all')
     );
 
-    if (hasSystemRole) {
+    if (hasAllOrgsPermission) {
       return this.organizationsRepo.find({
         order: { createdAt: 'DESC' },
         take: 500,
@@ -103,40 +107,46 @@ export class MeController {
     const matchingRole = (() => {
       if (organization) {
         const orgRole = userRoles.find((ur) => ur.role?.organization?.id === organization.id)?.role;
-        if (orgRole) {
-          return orgRole;
-        }
-
-        const systemRole = userRoles.find((ur) => ur.role?.isSystemRole)?.role;
-        if (systemRole) {
-          return systemRole;
-        }
-
-        return null;
+        return orgRole ?? null;
       }
 
       return userRoles[0]?.role ?? null;
     })();
 
+    // Récupérer l'employé pour les horaires de travail et la date de naissance
+    let employee: any = null;
+    if (currentUser.employeeId) {
+      employee = await this.employeeRepo
+        .createQueryBuilder('e')
+        .select(['e.workStartTime', 'e.workEndTime', 'e.birthDate'])
+        .where('e.id = :id', { id: currentUser.employeeId })
+        .getOne();
+    }
+
     return {
       user: {
         id: currentUser.id,
         email: currentUser.email ?? null,
+        employeeId: currentUser.employeeId ?? null,
+        firstName: currentUser.firstName ?? null,
+        lastName: currentUser.lastName ?? null,
+        workStartTime: employee?.workStartTime ?? null,
+        workEndTime: employee?.workEndTime ?? null,
+        birthDate: employee?.birthDate ?? currentUser.birthDate ?? null,
       },
       organization: organization
         ? {
-            id: organization.id,
-            name: organization.name,
-            nameCode: organization.nameCode,
-          }
+          id: organization.id,
+          name: organization.name,
+          nameCode: organization.nameCode,
+        }
         : null,
       role: matchingRole
         ? {
-            id: matchingRole.id,
-            name: matchingRole.name,
-            code: matchingRole.code,
-            isSystemRole: matchingRole.isSystemRole,
-          }
+          id: matchingRole.id,
+          name: matchingRole.name,
+          code: matchingRole.code,
+        }
         : null,
     };
   }

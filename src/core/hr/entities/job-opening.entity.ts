@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -12,6 +13,7 @@ import { HrDepartment } from './department.entity';
 import { JobPosition } from './job-position.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type JobOpeningStatus =
   | 'draft'
   | 'approved'
@@ -21,6 +23,22 @@ export type JobOpeningStatus =
   | 'filled'
   | 'cancelled';
 
+/**
+ * État de visibilité publique — découplé du status RH interne.
+ * draft           : pas encore prêt à être publié
+ * internal_review : en revue par l'équipe RH (jamais visible publiquement)
+ * published       : visible sur le site public (liveydream.com)
+ * archived        : retiré du public, conservé pour historique
+ */
+export type JobVisibilityState =
+  | 'draft'
+  | 'internal_review'
+  | 'published'
+  | 'archived';
+
+@Index('idx_job_openings_status', ['organizationId', 'status'])
+@Index('idx_job_openings_public', ['status', 'isPublic', 'closingDate'])
+@Index('idx_job_openings_slug', ['slug'], { unique: true })
 @Entity({ schema: 'module_c_rh', name: 'job_openings' })
 export class JobOpening {
   @PrimaryGeneratedColumn('uuid')
@@ -61,6 +79,7 @@ export class JobOpening {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 15,
     scale: 2,
     name: 'salary_range_min',
@@ -70,6 +89,7 @@ export class JobOpening {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 15,
     scale: 2,
     name: 'salary_range_max',
@@ -92,6 +112,23 @@ export class JobOpening {
 
   @Column({ type: 'date', name: 'closing_date', nullable: true })
   closingDate!: Date | null;
+
+  @Column({ type: 'varchar', length: 255, name: 'slug', nullable: true, unique: true })
+  slug!: string | null;
+
+  @Column({ type: 'boolean', name: 'is_public', default: false })
+  isPublic!: boolean;
+
+  @Column({ type: 'varchar', length: 30, name: 'visibility_state', default: 'draft' })
+  visibilityState!: JobVisibilityState;
+
+  @Column({ type: 'timestamp', name: 'published_at', nullable: true })
+  publishedAt!: Date | null;
+
+  // tsvector calculé via trigger Postgres. Jamais sérialisé côté JSON
+  // (TypeORM le lit tel quel comme string ; on ne le mappe pas dans les DTOs).
+  @Column({ type: 'tsvector', name: 'search_vector', nullable: true, select: false })
+  searchVector?: string | null;
 
   @Column({ type: 'uuid', name: 'created_by', nullable: true })
   createdBy!: string | null;

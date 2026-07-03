@@ -11,39 +11,41 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsBoolean, IsOptional, IsString } from 'class-validator';
 import { DepartmentService } from '../services/department.service';
-import { RolesGuard } from '../../rbac/roles.guard';
-import { Roles } from '../../rbac/roles.decorator';
+import { PermissionGuard } from '../../rbac/permission.guard';
+import { RequirePermission } from '../../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr.permissions';
 
 class CreateDepartmentDto {
-  parentDepartmentId?: string | null;
-  name!: string;
-  code!: string;
-  description?: string | null;
-  managerId?: string | null;
-  location?: string | null;
-  costCenter?: string | null;
-  isActive?: boolean;
+  @IsOptional() @IsString() parentDepartmentId?: string | null;
+  @IsString() name!: string;
+  @IsString() code!: string;
+  @IsOptional() @IsString() description?: string | null;
+  @IsOptional() @IsString() managerId?: string | null;
+  @IsOptional() @IsString() location?: string | null;
+  @IsOptional() @IsString() costCenter?: string | null;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 class UpdateDepartmentDto {
-  parentDepartmentId?: string | null;
-  name?: string;
-  code?: string;
-  description?: string | null;
-  managerId?: string | null;
-  location?: string | null;
-  costCenter?: string | null;
-  isActive?: boolean;
+  @IsOptional() @IsString() parentDepartmentId?: string | null;
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsString() description?: string | null;
+  @IsOptional() @IsString() managerId?: string | null;
+  @IsOptional() @IsString() location?: string | null;
+  @IsOptional() @IsString() costCenter?: string | null;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/hr/departments')
 export class DepartmentController {
-  constructor(private readonly service: DepartmentService) {}
+  constructor(private readonly service: DepartmentService) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_READ, { moduleCode: 'module_c_rh' })
   async list(@Req() req: any, @Query() query: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const page = query.page ? parseInt(query.page as string, 10) : undefined;
@@ -55,7 +57,7 @@ export class DepartmentController {
   }
 
   @Get(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_READ, { moduleCode: 'module_c_rh' })
   async findOne(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const item = await this.service.findOne(tenant?.id as string, id);
@@ -64,7 +66,7 @@ export class DepartmentController {
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_WRITE, { moduleCode: 'module_c_rh' })
   async create(@Req() req: any, @Body() dto: CreateDepartmentDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     if (!dto.name?.trim()) throw new BadRequestException('Le nom est obligatoire');
@@ -83,7 +85,7 @@ export class DepartmentController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_WRITE, { moduleCode: 'module_c_rh' })
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateDepartmentDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.update(tenant?.id as string, id, {
@@ -99,7 +101,7 @@ export class DepartmentController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(HR_PERMISSIONS.HR_ORGANIZATIONS_DELETE, { moduleCode: 'module_c_rh' })
   async delete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.delete(tenant?.id as string, id);

@@ -52,6 +52,9 @@ export class Organization {
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   email!: string | null;
+ 
+  @Column({ type: 'varchar', length: 255, name: 'email_domain', nullable: true })
+  emailDomain!: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   website!: string | null;

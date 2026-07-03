@@ -30,6 +30,10 @@ import { WorkflowValidationService } from './workflow-validation.service';
 import { TaskDependencyService } from './task-dependency.service';
 import { TasksController } from './tasks.controller';
 import { DeadlineReminderService } from './deadline-reminder.service';
+import { SubtaskService } from './subtask.service';
+import { ProjectCommentService } from './project-comment.service';
+import { TaskCommentService } from './task-comment.service';
+import { ProjectsRealtimeService } from './projects-realtime.service';
 
 @Module({
   imports: [
@@ -64,7 +68,20 @@ import { DeadlineReminderService } from './deadline-reminder.service';
     ProjectCommentsGateway,
     ProjectCommentsRealtimeService,
     DeadlineReminderService,
+    SubtaskService,
+    ProjectCommentService,
+    TaskCommentService,
+    ProjectsRealtimeService,
   ],
-  exports: [ProjectsService, WorkflowValidationService, TaskDependencyService],
+  exports: [
+    ProjectsService,
+    WorkflowValidationService,
+    TaskDependencyService,
+    SubtaskService,
+    ProjectCommentService,
+    TaskCommentService,
+    ProjectsRealtimeService,
+  ],
 })
-export class ProjectsModule {}
+export class ProjectsModule { }
+

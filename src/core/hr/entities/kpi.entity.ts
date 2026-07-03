@@ -12,6 +12,7 @@ import { Organization } from '../../organizations/organizations.entity';
 import { KpiWeight } from './kpi-weight.entity';
 import { EvaluationKpiScore } from './evaluation-kpi-score.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export interface ScoringRule {
   min: number;
   max: number;
@@ -46,6 +47,7 @@ export class Kpi {
   // Pondération par défaut
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'default_weight_percent',

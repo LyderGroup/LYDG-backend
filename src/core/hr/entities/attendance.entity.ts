@@ -10,6 +10,7 @@ import {
 import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type AttendanceStatus =
   | 'present'
   | 'absent'
@@ -41,7 +42,8 @@ export class Attendance {
   @Column({ type: 'time', name: 'scheduled_end_time', nullable: true })
   scheduledEndTime!: string | null;
 
-  @Column({ type: 'decimal', precision: 4, scale: 2, name: 'scheduled_hours', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 4, scale: 2, name: 'scheduled_hours', nullable: true })
   scheduledHours!: number | null;
 
   @Column({ type: 'timestamp', name: 'check_in', nullable: true })

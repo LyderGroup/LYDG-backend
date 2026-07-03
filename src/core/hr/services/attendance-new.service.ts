@@ -61,8 +61,9 @@ export class AttendanceService {
       qb.andWhere('a.status = :status', { status: options.status });
     }
 
-    qb.orderBy('a.attendance_date', 'DESC')
-      .addOrderBy('a.created_at', 'DESC')
+    // orderBy : propriétés camelCase (TypeORM crash sinon avec joins)
+    qb.orderBy('a.attendanceDate', 'DESC')
+      .addOrderBy('a.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -162,4 +163,5 @@ export class AttendanceService {
 
     return stats;
   }
+
 }

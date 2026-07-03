@@ -27,6 +27,9 @@ RUN npm ci --only=production && npm cache clean --force
 # Copier le build depuis le stage précédent
 COPY --from=builder /app/dist ./dist
 
+# Copier les fichiers de migration SQL
+COPY --from=builder /app/src/migrations ./src/migrations
+
 # Variables d'environnement par défaut
 ENV NODE_ENV=production
 ENV PORT=3000

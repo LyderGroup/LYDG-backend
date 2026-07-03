@@ -9,6 +9,7 @@ import {
 import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type SalaryChangeType = 'HIRED' | 'RAISE' | 'PROMOTION' | 'ADJUSTMENT' | 'DECREASE';
 
 @Entity({ schema: 'module_c_rh', name: 'employee_salary_history' })
@@ -24,7 +25,8 @@ export class EmployeeSalaryHistory {
   employee!: Employee;
 
   // le colone des salaires
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'base_salary' })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'base_salary' })
   baseSalary!: number;
 
   @Column({ type: 'varchar', length: 3, default: 'XOF' })
@@ -34,11 +36,13 @@ export class EmployeeSalaryHistory {
   @Column({ type: 'jsonb', default: [] })
   components!: Array<{ componentId: string; amount: number }>;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'total_fixed', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'total_fixed', nullable: true })
   totalFixed!: number | null;
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 15,
     scale: 2,
     name: 'max_performance_bonus',
@@ -54,7 +58,8 @@ export class EmployeeSalaryHistory {
   validTo!: Date | null;
 
   // Historique
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'previous_salary', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'previous_salary', nullable: true })
   previousSalary!: number | null;
 
   @Column({

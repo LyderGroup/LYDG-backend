@@ -3,11 +3,13 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   In,
+  IsNull,
   Repository,
   SelectQueryBuilder,
   EntityManager,
@@ -33,6 +35,45 @@ import { InAppNotificationService } from '../notifications/in-app-notification.s
 import { FcmService } from '../notifications/fcm.service';
 import { TaskDependencyService } from './task-dependency.service';
 import { TaskWorkflowValidation } from './task-workflow-validation.entity';
+import { SubtaskService } from './subtask.service';
+import { ProjectCommentService } from './project-comment.service';
+import { TaskCommentService } from './task-comment.service';
+import {
+  PROJECT_PERMISSIONS,
+  LEGACY_PROJECT_PERMISSIONS,
+  LEGACY_READ_ALL_CODES,
+  resolveUserScope,
+} from './project.permissions';
+import { ProjectsRealtimeService } from './projects-realtime.service';
+
+// ─── Workflow Step Constants (P2-4) ───────────────────────────────────────────
+export const WORKFLOW_STEPS = {
+  TODO: { name: 'À faire', order: 0, status: 'todo' },
+  IN_PROGRESS: { name: 'En cours', order: 1, status: 'in_progress' },
+  DONE: { name: 'Terminé', order: 2, status: 'completed' },
+} as const;
+
+export const WORKFLOW_STEP_NAMES = {
+  TODO: 'À faire',
+  IN_PROGRESS: 'En cours',
+  DONE: 'Terminé',
+  DRAFT: 'draft',
+  REVIEW: 'review',
+  APPROVED: 'approved',
+} as const;
+
+// ─── Step Name to Status Mapping (P2-3) ───────────────────────────────────────
+export const STEP_NAME_TO_STATUS: Record<string, string> = {
+  'à faire': 'todo',
+  'todo': 'todo',
+  'draft': 'todo',
+  'en cours': 'in_progress',
+  'in_progress': 'in_progress',
+  'review': 'review',
+  'terminé': 'completed',
+  'done': 'completed',
+  'approved': 'approved',
+};
 
 export type ControlTowerBucket = 'overdue' | 'pending_validation' | 'in_progress' | 'completed';
 
@@ -43,6 +84,8 @@ type TaskValidateScope = 'project' | 'team' | 'department' | 'tenant' | 'global'
 
 @Injectable()
 export class ProjectsService {
+  private readonly logger = new Logger(ProjectsService.name);
+
   constructor(
     @InjectRepository(Task)
     private readonly tasksRepo: Repository<Task>,
@@ -76,12 +119,18 @@ export class ProjectsService {
     private readonly taskDependencyService: TaskDependencyService,
     private readonly dataSource: DataSource,
     private readonly eventEmitter: EventEmitter2,
+    private readonly subtaskService: SubtaskService,
+    private readonly projectCommentService: ProjectCommentService,
+    private readonly taskCommentService: TaskCommentService,
+    private readonly realtime: ProjectsRealtimeService,
   ) { }
 
   private async ensureDefaultWorkflowForProject(input: {
     projectId: string;
+    queryRunner?: import('typeorm').QueryRunner;
   }): Promise<{ workflowId: string; firstStepId: string }> {
-    const existing = await this.projectWorkflowsRepo.findOne({ where: { projectId: input.projectId } });
+    const manager = input.queryRunner?.manager ?? this.projectWorkflowsRepo.manager;
+    const existing = await manager.findOne(this.projectWorkflowsRepo.target, { where: { projectId: input.projectId } } as any);
     if (existing?.id) {
       const first = await this.projectWorkflowStepsRepo.findOne({
         where: { workflowId: existing.id, stepOrder: 0 },
@@ -91,23 +140,22 @@ export class ProjectsService {
       }
     }
 
-    const wf = await this.projectWorkflowsRepo.save(
-      this.projectWorkflowsRepo.create({
-        projectId: input.projectId,
-        name: 'Workflow par défaut',
-        isDefault: true,
-      }),
-    );
+    const wf = manager.create(this.projectWorkflowsRepo.target as any, {
+      projectId: input.projectId,
+      name: 'Workflow par défaut',
+      isDefault: true,
+    }) as ProjectWorkflow;
+    await manager.save(wf);
 
     const steps = [
-      { name: 'À faire', stepOrder: 0, requiresValidation: false, validatorRole: null, isFinalStep: false },
-      { name: 'En cours', stepOrder: 1, requiresValidation: false, validatorRole: null, isFinalStep: false },
-      { name: 'Terminé', stepOrder: 2, requiresValidation: true, validatorRole: 'MANAGER_OR_OWNER', isFinalStep: true },
+      { name: WORKFLOW_STEPS.TODO.name, stepOrder: WORKFLOW_STEPS.TODO.order, requiresValidation: false, validatorRole: null, isFinalStep: false },
+      { name: WORKFLOW_STEPS.IN_PROGRESS.name, stepOrder: WORKFLOW_STEPS.IN_PROGRESS.order, requiresValidation: false, validatorRole: null, isFinalStep: false },
+      { name: WORKFLOW_STEPS.DONE.name, stepOrder: WORKFLOW_STEPS.DONE.order, requiresValidation: true, validatorRole: 'MANAGER_OR_OWNER', isFinalStep: true },
     ];
 
-    const savedSteps = await this.projectWorkflowStepsRepo.save(
+    const savedSteps = await manager.save(
       steps.map((s) =>
-        this.projectWorkflowStepsRepo.create({
+        manager.create(this.projectWorkflowStepsRepo.target as any, {
           workflowId: wf.id,
           name: s.name,
           stepOrder: s.stepOrder,
@@ -116,7 +164,7 @@ export class ProjectsService {
           isFinalStep: s.isFinalStep,
         }),
       ),
-    );
+    ) as ProjectWorkflowStep[];
 
     const first = savedSteps.find((s) => s.stepOrder === 0) ?? savedSteps[0];
     if (!first?.id) {
@@ -136,15 +184,15 @@ export class ProjectsService {
         SELECT 1 AS is_admin
         FROM core.user_roles ur
         INNER JOIN core.roles r ON r.id = ur.role_id
+        INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+        INNER JOIN core.permissions p ON p.id = rp.permission_id
         WHERE ur.user_id = $2
           AND ur.is_active = true
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
           AND r.is_active = true
-          AND (
-            r.is_system_role = true
-            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
-          )
-        LIMIT 1
+          AND p.code = ANY($4::text[])
+        AND r.organization_id = $3
+      LIMIT 1
       )
       SELECT p.id AS project_id, p.organization_id AS organization_id
       FROM module_b_projects.projects p
@@ -168,7 +216,11 @@ export class ProjectsService {
         )
       LIMIT 1
       `,
-      [input.projectId, input.userId],
+      // NB : $3 (organization_id) volontairement null ici — la query a été
+      // historiquement écrite pour désactiver le check admin scope tenant
+      // (à corriger dans un sprint séparé). $4 reçoit la liste des codes
+      // legacy reconnus comme "lecture globale" via la constante centrale.
+      [input.projectId, input.userId, null, LEGACY_READ_ALL_CODES],
     )) as Array<{ project_id?: string; organization_id?: string }>;
 
     const first = rows[0];
@@ -269,141 +321,63 @@ export class ProjectsService {
   }) {
     await this.assertProjectReadableOrThrow({ projectId: input.projectId, userId: input.userId });
 
-    const content = String(input.dto.content ?? '').trim();
-    if (!content) {
-      throw new BadRequestException('content is required');
-    }
-
-    const comment = this.projectCommentsRepo.create({
+    return this.projectCommentService.createProjectComment({
       projectId: input.projectId,
       userId: input.userId,
-      parentCommentId: null,
-      content,
-      contentType: 'text',
-      visibility: 'public',
-      isInternal: true,
-      mentions: [],
+      contextOrganizationId: input.contextOrganizationId,
+      dto: input.dto,
     });
-
-    const saved = await this.projectCommentsRepo.save(comment);
-
-    const withUser = await this.projectCommentsRepo
-      .createQueryBuilder('c')
-      .leftJoin('c.user', 'u')
-      .where('c.id = :id', { id: saved.id })
-      .getOne();
-
-    const rawName = withUser?.user ? `${withUser.user.firstName ?? ''} ${withUser.user.lastName ?? ''}`.trim() : '';
-    const authorName = rawName ? rawName : null;
-
-    const payload = {
-      id: saved.id,
-      projectId: saved.projectId,
-      parentCommentId: saved.parentCommentId,
-      userId: saved.userId,
-      authorName,
-      authorEmail: withUser?.user?.email ?? null,
-      content: saved.content,
-      contentType: saved.contentType,
-      isInternal: saved.isInternal,
-      visibility: saved.visibility,
-      createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
-    };
-
-    this.projectCommentsRealtime.emitCommentCreated({
-      projectId: saved.projectId,
-      payload,
-    });
-
-    this.sendProjectCommentNotifications(saved.projectId, input.userId, authorName, content, input.contextOrganizationId)
-      .catch(err => console.error('[ProjectsService] Error sending project comment notifications:', err));
-
-    return payload;
   }
 
-  private async sendProjectCommentNotifications(
-    projectId: string,
-    authorId: string,
-    authorName: string | null,
-    content: string,
-    organizationId: string,
-  ) {
-    const project = await this.projectsRepo.findOne({
-      where: { id: projectId },
-    });
-
-    if (!project) return;
-
-    const members = await this.projectMembersRepo.find({
-      where: { projectId },
-      select: ['userId'],
-    });
-
-    const recipientIds = new Set<string>(
-      members
-        .map(m => m.userId)
-        .filter(id => id !== authorId)
-    );
-
-    // Ajouter le chef de département
-    if (project.departmentId) {
-      const deptManagers = await this.projectsRepo.manager.query(
-        `
-        SELECT dm.user_id
-        FROM module_c_rh.department_managers dm
-        WHERE dm.department_id = $1
-        `,
-        [project.departmentId],
-      );
-      for (const row of deptManagers || []) {
-        if (row.user_id && row.user_id !== authorId) {
-          recipientIds.add(row.user_id);
-        }
-      }
-    }
-
-    const title = `Nouveau message sur le projet: ${project.name}`;
-    const body = `${authorName || 'Quelqu\'un'} a dit : ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`;
-
-    for (const recipientId of recipientIds) {
-      // In-App
-      await this.inAppNotificationService.create({
-        userId: recipientId,
-        organizationId,
-        title,
-        message: body,
-        type: 'project_comment',
-        data: { projectId, authorId },
-      }).catch(() => { });
-
-      // FCM (Push)
-      await this.fcmService.sendToUser(recipientId, title, body, {
-        type: 'project_comment',
-        projectId,
-      }).catch(() => { });
-    }
-  }
-
+  /**
+   * Recalcule la progression du projet à partir de celle de ses tâches.
+   *
+   * Pondération (Sprint C) : chaque tâche a un poids égal à
+   * max(1, nbSubtasks). Une tâche avec 10 sous-tâches pèse 10× plus dans
+   * la moyenne qu'une tâche atomique → la progression projet reflète
+   * mieux la charge réelle.
+   *
+   * Si un projet n'a aucune tâche, sa progression est 0. Si toutes les
+   * tâches sont sans sous-tâches, on retombe sur AVG(progress) classique.
+   */
   private async recalcProjectProgressFromTasks(input: {
     projectId: string;
     contextOrganizationId: string;
   }): Promise<number> {
     const rows = (await this.projectsRepo.manager.query(
       `
+      WITH task_weights AS (
+        SELECT
+          t.id,
+          t.progress,
+          GREATEST(
+            1,
+            (
+              SELECT COUNT(*)::int
+              FROM module_b_projects.subtasks s
+              WHERE s.task_id = t.id
+                AND s.deleted_at IS NULL
+            )
+          ) AS weight
+        FROM module_b_projects.tasks t
+        WHERE t.project_id = $1
+          AND t.organization_id = $2
+          AND t.deleted_at IS NULL
+      )
       SELECT
         COUNT(*)::int AS total,
-        COALESCE(AVG(t.progress), 0)::float AS avg
-      FROM module_b_projects.tasks t
-      WHERE t.project_id = $1
-        AND t.organization_id = $2
+        COALESCE(
+          SUM(progress * weight)::float / NULLIF(SUM(weight), 0),
+          0
+        )::float AS weighted_avg
+      FROM task_weights
       `,
       [input.projectId, input.contextOrganizationId],
-    )) as Array<{ total?: number; avg?: number }>;
+    )) as Array<{ total?: number; weighted_avg?: number }>;
 
     const total = Number(rows[0]?.total ?? 0);
-    const avg = Number(rows[0]?.avg ?? 0);
-    const progress = total <= 0 ? 0 : Math.round(avg);
+    const weightedAvg = Number(rows[0]?.weighted_avg ?? 0);
+    const progress = total <= 0 ? 0 : Math.round(weightedAvg);
 
     await this.projectsRepo.update(
       { id: input.projectId, organizationId: input.contextOrganizationId },
@@ -503,11 +477,12 @@ export class ProjectsService {
       throw new BadRequestException('Dependencies must be within the same project');
     }
 
-    await this.assertNoCircularTaskDependencyOrThrow({
-      taskId: task.id,
-      dependsOnTaskId: dependsOnTask.id,
-      contextOrganizationId: input.contextOrganizationId,
-    });
+    await this.taskDependencyService.assertNoCycleWouldBeCreated(
+      task.id,
+      dependsOnTask.id,
+      input.contextOrganizationId,
+      task.projectId,
+    );
 
     const dependencyType = input.dependencyType ? String(input.dependencyType) : 'finish_to_start';
     const lagDays = Number.isFinite(input.lagDays as number) ? Number(input.lagDays) : 0;
@@ -599,41 +574,6 @@ export class ProjectsService {
     return { deleted: true };
   }
 
-  private async assertNoCircularTaskDependencyOrThrow(input: {
-    taskId: string;
-    dependsOnTaskId: string;
-    contextOrganizationId: string;
-  }) {
-    const rows = (await this.tasksRepo.manager.query(
-      `
-      WITH RECURSIVE dep_path AS (
-        SELECT td.task_id, td.depends_on_task_id
-        FROM module_b_projects.task_dependencies td
-        INNER JOIN module_b_projects.tasks t ON t.id = td.task_id
-        WHERE t.organization_id = $1
-          AND td.task_id = $2
-
-        UNION ALL
-
-        SELECT td2.task_id, td2.depends_on_task_id
-        FROM module_b_projects.task_dependencies td2
-        INNER JOIN dep_path p ON p.depends_on_task_id = td2.task_id
-        INNER JOIN module_b_projects.tasks t2 ON t2.id = td2.task_id
-        WHERE t2.organization_id = $1
-      )
-      SELECT 1 AS ok
-      FROM dep_path
-      WHERE depends_on_task_id = $3
-      LIMIT 1
-      `,
-      [input.contextOrganizationId, input.dependsOnTaskId, input.taskId],
-    )) as Array<{ ok?: number }>;
-
-    if (rows?.[0]?.ok) {
-      throw new BadRequestException('Circular dependency detected');
-    }
-  }
-
   private async assertTaskDependenciesResolvedOrThrow(input: {
     taskId: string;
     contextOrganizationId: string;
@@ -666,12 +606,46 @@ export class ProjectsService {
     contextOrganizationId: string;
     permissionCodes: string[];
   }) {
-    const task = await this.tasksRepo.findOne({
+    let task = await this.tasksRepo.findOne({
       where: { id: input.taskId, organizationId: input.contextOrganizationId },
     });
+
+    // Cas cross-org : task dans une autre organisation mais le user est membre
+    // du projet (multi-département/multi-org) → on autorise via membership.
     if (!task) {
-      throw new NotFoundException('Task not found');
+      const anyOrg = await this.tasksRepo.findOne({
+        where: { id: input.taskId, deletedAt: IsNull() },
+      });
+      if (!anyOrg?.id) {
+        throw new NotFoundException('Task not found');
+      }
+      const access: Array<{ ok: number }> = await this.tasksRepo.manager.query(
+        `
+        SELECT 1 AS ok
+        FROM module_b_projects.projects p
+        LEFT JOIN module_b_projects.project_members pm
+          ON pm.project_id = p.id AND pm.user_id = $2
+        LEFT JOIN module_b_projects.project_managers pma
+          ON pma.project_id = p.id AND pma.user_id = $2
+        WHERE p.id = $1
+          AND p.deleted_at IS NULL
+          AND (
+            pm.id IS NOT NULL OR pma.id IS NOT NULL
+            OR p.manager_id = $2 OR p.created_by = $2
+          )
+        LIMIT 1
+        `,
+        [anyOrg.projectId, input.userId],
+      );
+      if (access.length === 0) {
+        throw new ForbiddenException('Task not accessible in this tenant');
+      }
+      task = anyOrg;
     }
+
+    // À partir d'ici on travaille sur l'org RÉELLE de la task (peut différer
+    // du contextOrganizationId quand cross-org).
+    const taskOrgId = task.organizationId;
 
     await this.assertTaskReadableOrThrow({
       taskId: task.id,
@@ -685,12 +659,17 @@ export class ProjectsService {
       task.workflowId = wf.workflowId;
       task.currentStepId = wf.firstStepId;
       await this.tasksRepo.update(
-        { id: task.id, organizationId: input.contextOrganizationId },
+        { id: task.id, organizationId: taskOrgId },
         { workflowId: task.workflowId, currentStepId: task.currentStepId } as QueryDeepPartialEntity<Task>,
       );
     }
 
-    const current = await this.projectWorkflowStepsRepo.findOne({ where: { id: task.currentStepId } });
+    // Filtre soft-delete (Sprint B). organizationId n'est pas direct sur
+    // workflow_step — la sécurité tenant vient du fait que task est déjà
+    // filtré par contextOrganizationId en amont.
+    const current = await this.projectWorkflowStepsRepo.findOne({
+      where: { id: task.currentStepId, deletedAt: IsNull() },
+    });
     if (!current) {
       throw new BadRequestException('Invalid current workflow step');
     }
@@ -721,14 +700,18 @@ export class ProjectsService {
 
     let statusPatch: string | undefined;
     const stepName = String(next.name ?? '').toLowerCase();
-    if (next.isFinalStep || stepName === 'done' || stepName === 'terminé') statusPatch = 'completed';
-    else if (stepName === 'approved') statusPatch = 'approved';
-    else if (stepName === 'review' || stepName.includes('review')) statusPatch = 'review';
-    else if (stepName === 'draft' || stepName === 'à faire') statusPatch = 'todo';
-    else if (stepName === 'en cours') statusPatch = 'in_progress';
+
+    // Use the centralized mapping for step name to status
+    if (next.isFinalStep) {
+      statusPatch = 'completed';
+    } else if (STEP_NAME_TO_STATUS[stepName]) {
+      statusPatch = STEP_NAME_TO_STATUS[stepName];
+    } else if (stepName.includes('review')) {
+      statusPatch = 'review';
+    }
 
     await this.tasksRepo.update(
-      { id: task.id, organizationId: input.contextOrganizationId },
+      { id: task.id, organizationId: taskOrgId },
       {
         currentStepId: next.id,
         ...(statusPatch ? { status: statusPatch } : {}),
@@ -738,7 +721,14 @@ export class ProjectsService {
 
     // Notification de tâche terminée
     if (statusPatch === 'completed' && task.projectId) {
-      const project = await this.projectsRepo.findOne({ where: { id: task.projectId } });
+      // Filtre tenant explicite + exclusion soft-deleted (Sprint B).
+      const project = await this.projectsRepo.findOne({
+        where: {
+          id: task.projectId,
+          organizationId: taskOrgId,
+          deletedAt: IsNull(),
+        },
+      });
       if (project) {
         // Notifier le manager du projet et le créateur
         const recipientIds = new Set<string>();
@@ -763,7 +753,7 @@ export class ProjectsService {
               { type: 'task_completed', taskId: task.id, projectId: task.projectId },
             );
           } catch (e) {
-            console.error('[moveTaskToNextWorkflowStep] Notification error:', e);
+            this.logger.error('[moveTaskToNextWorkflowStep] Notification error:', e);
           }
         }
       }
@@ -789,12 +779,40 @@ export class ProjectsService {
     let task = await this.tasksRepo.findOne({
       where: { id: input.taskId, organizationId: input.contextOrganizationId },
     });
+
+    // Cas cross-org/département : si la task est dans une autre organisation
+    // mais que le user est membre du projet, on autorise l'accès. Sinon 403.
     if (!task) {
-      const anyOrg = await this.tasksRepo.findOne({ where: { id: input.taskId } });
-      if (anyOrg?.id) {
+      const anyOrg = await this.tasksRepo.findOne({
+        where: { id: input.taskId, deletedAt: IsNull() },
+      });
+      if (!anyOrg?.id) {
+        throw new NotFoundException('Task not found');
+      }
+      // Vérifie l'accès via project membership
+      const access: Array<{ ok: number }> = await this.tasksRepo.manager.query(
+        `
+        SELECT 1 AS ok
+        FROM module_b_projects.projects p
+        LEFT JOIN module_b_projects.project_members pm
+          ON pm.project_id = p.id AND pm.user_id = $2
+        LEFT JOIN module_b_projects.project_managers pma
+          ON pma.project_id = p.id AND pma.user_id = $2
+        WHERE p.id = $1
+          AND p.deleted_at IS NULL
+          AND (
+            pm.id IS NOT NULL OR pma.id IS NOT NULL
+            OR p.manager_id = $2 OR p.created_by = $2
+          )
+        LIMIT 1
+        `,
+        [anyOrg.projectId, input.userId],
+      );
+      if (access.length === 0) {
         throw new ForbiddenException('Task not accessible in this tenant');
       }
-      throw new NotFoundException('Task not found');
+      // OK : user membre du projet cross-org → autoriser
+      task = anyOrg;
     }
 
     await this.assertTaskReadableOrThrow({
@@ -814,7 +832,9 @@ export class ProjectsService {
       );
     }
 
-    const current = await this.projectWorkflowStepsRepo.findOne({ where: { id: task.currentStepId! } });
+    const current = await this.projectWorkflowStepsRepo.findOne({
+      where: { id: task.currentStepId!, deletedAt: IsNull() },
+    });
     const steps = await this.projectWorkflowStepsRepo.find({
       where: { workflowId: task.workflowId! },
       order: { stepOrder: 'ASC' },
@@ -858,20 +878,23 @@ export class ProjectsService {
     return Array.from(new Set(list.map((x) => String(x))));
   }
 
-  private async userHasAnySystemRole(userId: string, _organizationId: string): Promise<boolean> {
+  private async userHasPermission(userId: string, organizationId: string, permissionCode: string): Promise<boolean> {
     const rows = (await this.userRolesRepo.manager.query(
       `
       SELECT 1 AS ok
       FROM core.user_roles ur
       INNER JOIN core.roles r ON r.id = ur.role_id
+      INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+      INNER JOIN core.permissions p ON p.id = rp.permission_id
       WHERE ur.user_id = $1
         AND ur.is_active = true
         AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
         AND r.is_active = true
-        AND r.is_system_role = true
+        AND r.organization_id = $2
+        AND p.code = $3
       LIMIT 1
       `,
-      [userId],
+      [userId, organizationId, permissionCode],
     )) as Array<{ ok?: number }>;
 
     return !!rows?.[0]?.ok;
@@ -985,9 +1008,14 @@ export class ProjectsService {
     const managerIds = this.uniqueStrings(this.normalizeUuidList(input.dto.managerIds));
     const memberIds = this.uniqueStrings(this.normalizeUuidList(input.dto.memberIds));
 
-    const hasSystemRole = await this.userHasAnySystemRole(input.userId, input.contextOrganizationId);
+    // Plus de rôle système - vérifier la permission project.create.all
+    const hasAllProjectsPermission = await this.userHasPermission(
+      input.userId,
+      input.contextOrganizationId,
+      LEGACY_PROJECT_PERMISSIONS.PROJECT_CREATE_ALL,
+    );
 
-    if (!hasSystemRole) {
+    if (!hasAllProjectsPermission) {
       const canCreate = await this.userHasAnyRoleInOrgs({
         userId: input.userId,
         organizationIds: orgIds,
@@ -1064,34 +1092,32 @@ export class ProjectsService {
       deptPairs[0]!.departmentId;
     const primaryManagerId = managerIds[0] ?? null;
 
-    const project = this.projectsRepo.create({
-      organizationId: primaryOrgId,
-      departmentId: primaryDept,
-      name: String(input.dto.name).trim(),
-      code: String(input.dto.code).trim(),
-      description: input.dto.description ?? null,
-      startDate: input.dto.startDate ?? null,
-      plannedEndDate: input.dto.plannedEndDate ?? null,
-      managerId: primaryManagerId,
-      createdBy: input.userId,
-    });
-
-    const saved = await this.projectsRepo.save(project);
+    // Start transaction for atomic project creation
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
     try {
-      await this.ensureDefaultWorkflowForProject({ projectId: saved.id });
-    } catch (e: any) {
-      console.error('[createProjectV2] Workflow init failed:', e);
-      const msg = String(e?.message ?? e ?? '').trim();
-      throw new InternalServerErrorException(
-        `Project created but workflow initialization failed. ${msg}`,
-      );
-    }
+      const project = queryRunner.manager.create(this.projectsRepo.target as any, {
+        organizationId: primaryOrgId,
+        departmentId: primaryDept,
+        name: String(input.dto.name).trim(),
+        code: String(input.dto.code).trim(),
+        description: input.dto.description ?? null,
+        startDate: input.dto.startDate ?? null,
+        plannedEndDate: input.dto.plannedEndDate ?? null,
+        managerId: primaryManagerId,
+        createdBy: input.userId,
+      });
 
-    // Link organizations
-    try {
+      const saved = (await queryRunner.manager.save(project)) as Project;
+
+      // Create workflow within transaction
+      await this.ensureDefaultWorkflowForProject({ projectId: saved.id, queryRunner });
+
+      // Link organizations
       for (const orgId of orgIds) {
-        await this.projectsRepo.manager.query(
+        await queryRunner.manager.query(
           `
           INSERT INTO module_b_projects.project_organizations (project_id, organization_id, org_role)
           VALUES ($1, $2, $3)
@@ -1100,14 +1126,10 @@ export class ProjectsService {
           [saved.id, orgId, orgId === primaryOrgId ? 'OWNER' : 'PARTICIPANT'],
         );
       }
-    } catch (e: any) {
-      console.error('[createProjectV2] Link organizations failed:', e);
-    }
 
-    // Link departments
-    try {
+      // Link departments
       for (const d of deptPairs) {
-        await this.projectsRepo.manager.query(
+        await queryRunner.manager.query(
           `
           INSERT INTO module_b_projects.project_departments (project_id, organization_id, department_id)
           VALUES ($1, $2, $3)
@@ -1116,15 +1138,11 @@ export class ProjectsService {
           [saved.id, d.organizationId, d.departmentId],
         );
       }
-    } catch (e: any) {
-      console.error('[createProjectV2] Link departments failed:', e);
-    }
 
-    // Link managers - inclure le créateur automatiquement
-    try {
+      // Link managers - inclure le créateur automatiquement
       const allManagerIds = this.uniqueStrings([...managerIds, input.userId]);
       for (const managerId of allManagerIds) {
-        await this.projectsRepo.manager.query(
+        await queryRunner.manager.query(
           `
           INSERT INTO module_b_projects.project_managers (project_id, user_id, manager_role, added_by)
           VALUES ($1, $2, 'LEAD', $3)
@@ -1133,45 +1151,45 @@ export class ProjectsService {
           [saved.id, managerId, input.userId],
         );
       }
-    } catch (e: any) {
-      console.error('[createProjectV2] Link managers failed:', e);
-    }
 
-    // Project members
-    try {
+      // Project members
       const allMemberIds = this.uniqueStrings([...memberIds, ...managerIds, input.userId]);
       for (const userId of allMemberIds) {
-        await this.projectMembersRepo.save(
-          this.projectMembersRepo.create({
-            projectId: saved.id,
-            userId,
-            roleInProject: managerIds.includes(userId) || userId === input.userId
-              ? 'MANAGER'
-              : 'MEMBER',
-            addedBy: input.userId,
-          }),
-        );
+        const member = queryRunner.manager.create(this.projectMembersRepo.target as any, {
+          projectId: saved.id,
+          userId,
+          roleInProject: managerIds.includes(userId) || userId === input.userId
+            ? 'MANAGER'
+            : 'MEMBER',
+          addedBy: input.userId,
+        });
+        await queryRunner.manager.save(member);
       }
-    } catch (e: any) {
-      console.error('[createProjectV2] Project members failed:', e);
+
+      await queryRunner.commitTransaction();
+
+      // Envoyer des notifications de création de projet aux membres (hors transaction)
+      this.sendProjectCreatedNotifications(saved.id, input.userId, saved.name, input.contextOrganizationId)
+        .catch(err => this.logger.error('Error sending project created notifications:', err));
+
+      return {
+        id: saved.id,
+        organizationId: saved.organizationId,
+        departmentId: saved.departmentId,
+        name: saved.name,
+        code: saved.code,
+        description: saved.description,
+        managerId: saved.managerId,
+        createdBy: saved.createdBy,
+        createdAt: saved.createdAt,
+        updatedAt: saved.updatedAt,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
-
-    // Envoyer des notifications de création de projet aux membres
-    this.sendProjectCreatedNotifications(saved.id, input.userId, saved.name, input.contextOrganizationId)
-      .catch(err => console.error('[ProjectsService] Error sending project created notifications:', err));
-
-    return {
-      id: saved.id,
-      organizationId: saved.organizationId,
-      departmentId: saved.departmentId,
-      name: saved.name,
-      code: saved.code,
-      description: saved.description,
-      managerId: saved.managerId,
-      createdBy: saved.createdBy,
-      createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
-    };
   }
 
   private async sendProjectCreatedNotifications(
@@ -1193,37 +1211,50 @@ export class ProjectsService {
     const title = `Nouveau projet créé: ${projectName}`;
     const body = `Vous avez été ajouté au projet "${projectName}". Cliquez pour voir les détails.`;
 
-    for (const recipientId of recipientIds) {
-      // In-App
-      await this.inAppNotificationService.create({
-        userId: recipientId,
-        organizationId,
-        title,
-        message: body,
-        type: 'project_created',
-        data: { projectId, creatorId },
-      }).catch(() => { });
-
-      // FCM (Push)
-      await this.fcmService.sendToUser(recipientId, title, body, {
-        type: 'project_created',
-        projectId,
-      }).catch(() => { });
-    }
+    // Send notifications in parallel
+    await Promise.all(
+      recipientIds.map(recipientId =>
+        Promise.all([
+          this.inAppNotificationService.create({
+            userId: recipientId,
+            organizationId,
+            title,
+            message: body,
+            type: 'project_created',
+            data: { projectId, creatorId },
+          }).catch(() => { }),
+          this.fcmService.sendToUser(recipientId, title, body, {
+            type: 'project_created',
+            projectId,
+          }).catch(() => { }),
+        ]),
+      ),
+    );
   }
 
+  // Simple in-memory cache for organization access (TTL 5 minutes)
+  private readonly orgAccessCache = new Map<string, { orgIds: string[]; expiresAt: number }>();
+  private readonly ORG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
   private async resolveAccessibleOrganizationIdsForUser(userId: string): Promise<string[]> {
+    // Check cache first
+    const cached = this.orgAccessCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.orgIds;
+    }
+
     const userRoles = await this.userRolesRepo.find({
       where: { userId, isActive: true },
-      relations: ['role', 'role.organization'],
+      relations: ['role', 'role.organization', 'role.rolePermissions', 'role.rolePermissions.permission'],
       order: { assignedAt: 'DESC' },
     });
 
-    const hasSystemRole = userRoles.some(
-      (ur) => ur.role?.isSystemRole || ur.role?.code === 'SUPER_ADMIN',
+    // Plus de rôle système - vérifier la permission hr.organizations.read.all
+    const hasAllOrgsPermission = userRoles.some((ur) =>
+      ur.role?.rolePermissions?.some((rp: any) => rp.permission?.code === 'hr.organizations.read.all')
     );
 
-    if (hasSystemRole) {
+    if (hasAllOrgsPermission) {
       const orgs = await this.organizationsRepo.find({
         order: { createdAt: 'DESC' },
         take: 500,
@@ -1320,7 +1351,15 @@ export class ProjectsService {
       }
     }
 
-    return Array.from(organizationsMap.keys());
+    const result = Array.from(organizationsMap.keys());
+
+    // Store in cache
+    this.orgAccessCache.set(userId, {
+      orgIds: result,
+      expiresAt: Date.now() + this.ORG_CACHE_TTL_MS,
+    });
+
+    return result;
   }
 
   private csvEscape(v: any): string {
@@ -1347,12 +1386,10 @@ export class ProjectsService {
     const isAssignee = !!task.assigneeId && task.assigneeId === input.userId;
     const isCreator = !!(task as any)?.createdBy && String((task as any).createdBy) === input.userId;
     const permSet = new Set((input.permissionCodes ?? []).filter(Boolean));
-    const hasElevatedWrite =
-      permSet.has('projects.task.write.global') ||
-      permSet.has('projects.task.write.tenant') ||
-      permSet.has('projects.task.write.department') ||
-      permSet.has('projects.task.write.team') ||
-      permSet.has('projects.task.write.project');
+    // Élevé = au moins scope project ou plus large (own n'est pas élevé).
+    const hasElevatedWrite = PROJECT_PERMISSIONS.TASK.WRITE.ALL_SCOPES
+      .filter(code => !code.endsWith('.own'))
+      .some(code => permSet.has(code));
 
     if (!isAssignee && !hasElevatedWrite) {
       try {
@@ -1391,34 +1428,6 @@ export class ProjectsService {
     return task;
   }
 
-  private async recalcTaskProgressFromSubtasks(input: {
-    taskId: string;
-    contextOrganizationId: string;
-  }): Promise<number> {
-    const rows = (await this.tasksRepo.manager.query(
-      `
-      SELECT
-        COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE s.is_completed = true)::int AS done
-      FROM module_b_projects.subtasks s
-      INNER JOIN module_b_projects.tasks t ON t.id = s.task_id
-      WHERE s.task_id = $1 AND t.organization_id = $2
-      `,
-      [input.taskId, input.contextOrganizationId],
-    )) as Array<{ total?: number; done?: number }>;
-
-    const total = Number(rows[0]?.total ?? 0);
-    const done = Number(rows[0]?.done ?? 0);
-    const progress = total <= 0 ? 0 : Math.round((done / total) * 100);
-
-    await this.tasksRepo.update(
-      { id: input.taskId, organizationId: input.contextOrganizationId },
-      { progress } as QueryDeepPartialEntity<Task>,
-    );
-
-    return progress;
-  }
-
   async listSubtasks(input: {
     taskId: string;
     userId: string;
@@ -1432,25 +1441,7 @@ export class ProjectsService {
       permissionCodes: input.permissionCodes,
     });
 
-    const rows = await this.subtasksRepo.find({
-      where: { taskId: input.taskId },
-      order: { position: 'ASC', createdAt: 'ASC' },
-      take: 500,
-    });
-
-    return rows.map((s) => ({
-      id: s.id,
-      taskId: s.taskId,
-      title: s.title,
-      description: s.description,
-      isCompleted: s.isCompleted,
-      completedBy: s.completedBy,
-      completedAt: s.completedAt,
-      dueDate: s.dueDate,
-      position: s.position,
-      createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
-    }));
+    return this.subtaskService.listSubtasks(input.taskId);
   }
 
   async createSubtask(input: {
@@ -1465,10 +1456,6 @@ export class ProjectsService {
       position?: number;
     };
   }) {
-    if (!input.dto.title || !input.dto.title.trim()) {
-      throw new BadRequestException('title is required');
-    }
-
     const task = await this.assertUserCanManageSubtasksOrThrow({
       taskId: input.taskId,
       userId: input.userId,
@@ -1476,19 +1463,10 @@ export class ProjectsService {
       permissionCodes: input.permissionCodes,
     });
 
-    const created = await this.subtasksRepo.save(
-      this.subtasksRepo.create({
-        taskId: input.taskId,
-        title: input.dto.title.trim(),
-        description: input.dto.description ?? null,
-        dueDate: input.dto.dueDate ?? null,
-        position: typeof input.dto.position === 'number' ? input.dto.position : 0,
-      }),
-    );
-
-    const progress = await this.recalcTaskProgressFromSubtasks({
+    const result = await this.subtaskService.createSubtask({
       taskId: input.taskId,
-      contextOrganizationId: input.contextOrganizationId,
+      userId: input.userId,
+      dto: input.dto,
     });
 
     await this.recalcProjectProgressFromTasks({
@@ -1496,20 +1474,7 @@ export class ProjectsService {
       contextOrganizationId: input.contextOrganizationId,
     });
 
-    return {
-      id: created.id,
-      taskId: created.taskId,
-      title: created.title,
-      description: created.description,
-      isCompleted: created.isCompleted,
-      completedBy: created.completedBy,
-      completedAt: created.completedAt,
-      dueDate: created.dueDate,
-      position: created.position,
-      createdAt: created.createdAt,
-      updatedAt: created.updatedAt,
-      taskProgress: progress,
-    };
+    return result;
   }
 
   async updateSubtask(input: {
@@ -1525,71 +1490,23 @@ export class ProjectsService {
       isCompleted?: boolean;
     };
   }) {
-    const subtask = await this.subtasksRepo
-      .createQueryBuilder('s')
-      .innerJoin(Task, 't', 't.id = s.task_id')
-      .where('s.id = :id', { id: input.subtaskId })
-      .andWhere('t.organization_id = :orgId', { orgId: input.contextOrganizationId })
-      .getOne();
-    if (!subtask) {
-      throw new NotFoundException('Subtask not found');
-    }
-
-    const task = await this.assertUserCanManageSubtasksOrThrow({
-      taskId: subtask.taskId,
+    const result = await this.subtaskService.updateSubtask({
+      subtaskId: input.subtaskId,
+      contextOrganizationId: input.contextOrganizationId,
       userId: input.userId,
-      contextOrganizationId: input.contextOrganizationId,
-      permissionCodes: input.permissionCodes,
+      dto: input.dto,
     });
 
-    const patch: QueryDeepPartialEntity<Subtask> = {};
-    if (typeof input.dto.title === 'string') patch.title = input.dto.title;
-    if (input.dto.description !== undefined) patch.description = input.dto.description ?? null;
-    if (input.dto.dueDate !== undefined) patch.dueDate = input.dto.dueDate ?? null;
-    if (typeof input.dto.position === 'number') patch.position = input.dto.position;
-
-    if (typeof input.dto.isCompleted === 'boolean') {
-      patch.isCompleted = input.dto.isCompleted;
-      if (input.dto.isCompleted) {
-        patch.completedBy = input.userId;
-        patch.completedAt = new Date();
-      } else {
-        patch.completedBy = null;
-        patch.completedAt = null;
-      }
+    // Recalculate project progress
+    const task = await this.tasksRepo.findOne({ where: { id: result.taskId } });
+    if (task?.projectId) {
+      await this.recalcProjectProgressFromTasks({
+        projectId: task.projectId,
+        contextOrganizationId: input.contextOrganizationId,
+      });
     }
 
-    await this.subtasksRepo.update({ id: input.subtaskId }, patch);
-
-    const progress = await this.recalcTaskProgressFromSubtasks({
-      taskId: subtask.taskId,
-      contextOrganizationId: input.contextOrganizationId,
-    });
-
-    await this.recalcProjectProgressFromTasks({
-      projectId: task.projectId,
-      contextOrganizationId: input.contextOrganizationId,
-    });
-
-    const updated = await this.subtasksRepo.findOne({ where: { id: input.subtaskId } });
-    if (!updated) {
-      throw new NotFoundException('Subtask not found');
-    }
-
-    return {
-      id: updated.id,
-      taskId: updated.taskId,
-      title: updated.title,
-      description: updated.description,
-      isCompleted: updated.isCompleted,
-      completedBy: updated.completedBy,
-      completedAt: updated.completedAt,
-      dueDate: updated.dueDate,
-      position: updated.position,
-      createdAt: updated.createdAt,
-      updatedAt: updated.updatedAt,
-      taskProgress: progress,
-    };
+    return result;
   }
 
   async deleteSubtask(input: {
@@ -1598,36 +1515,21 @@ export class ProjectsService {
     contextOrganizationId: string;
     permissionCodes: string[];
   }) {
-    const subtask = await this.subtasksRepo
-      .createQueryBuilder('s')
-      .innerJoin(Task, 't', 't.id = s.task_id')
-      .where('s.id = :id', { id: input.subtaskId })
-      .andWhere('t.organization_id = :orgId', { orgId: input.contextOrganizationId })
-      .getOne();
-    if (!subtask) {
-      throw new NotFoundException('Subtask not found');
+    const result = await this.subtaskService.deleteSubtask({
+      subtaskId: input.subtaskId,
+      contextOrganizationId: input.contextOrganizationId,
+    });
+
+    // Recalculate project progress
+    const task = await this.tasksRepo.findOne({ where: { id: result.taskId } });
+    if (task?.projectId) {
+      await this.recalcProjectProgressFromTasks({
+        projectId: task.projectId,
+        contextOrganizationId: input.contextOrganizationId,
+      });
     }
 
-    const task = await this.assertUserCanManageSubtasksOrThrow({
-      taskId: subtask.taskId,
-      userId: input.userId,
-      contextOrganizationId: input.contextOrganizationId,
-      permissionCodes: input.permissionCodes,
-    });
-
-    await this.subtasksRepo.delete({ id: input.subtaskId });
-
-    const progress = await this.recalcTaskProgressFromSubtasks({
-      taskId: subtask.taskId,
-      contextOrganizationId: input.contextOrganizationId,
-    });
-
-    await this.recalcProjectProgressFromTasks({
-      projectId: task.projectId,
-      contextOrganizationId: input.contextOrganizationId,
-    });
-
-    return { deleted: true, taskId: subtask.taskId, taskProgress: progress };
+    return result;
   }
 
   async listTaskComments(input: {
@@ -1690,120 +1592,12 @@ export class ProjectsService {
       permissionCodes: input.permissionCodes,
     });
 
-    const content = String(input.dto.content ?? '').trim();
-    if (!content) {
-      throw new BadRequestException('content is required');
-    }
-
-    const comment = this.taskCommentsRepo.create({
+    return this.taskCommentService.createTaskComment({
       taskId: input.taskId,
       userId: input.userId,
-      parentCommentId: input.dto.parentCommentId ?? null,
-      content,
-      contentType: 'text',
-      visibility: input.dto.visibility ? String(input.dto.visibility) : 'public',
-      isInternal: input.dto.isInternal ?? true,
-      mentions: [],
+      contextOrganizationId: input.contextOrganizationId,
+      dto: input.dto,
     });
-
-    const saved = await this.taskCommentsRepo.save(comment);
-
-    const withUser = await this.taskCommentsRepo
-      .createQueryBuilder('c')
-      .leftJoin('c.user', 'u')
-      .where('c.id = :id', { id: saved.id })
-      .getOne();
-
-    const rawName = withUser?.user
-      ? `${withUser.user.firstName ?? ''} ${withUser.user.lastName ?? ''}`.trim()
-      : '';
-    const authorName = rawName ? rawName : null;
-
-    const payload = {
-      id: saved.id,
-      taskId: saved.taskId,
-      parentCommentId: saved.parentCommentId,
-      userId: saved.userId,
-      authorName,
-      authorEmail: withUser?.user?.email ?? null,
-      content: saved.content,
-      contentType: saved.contentType,
-      isInternal: saved.isInternal,
-      visibility: saved.visibility,
-      createdAt: saved.createdAt,
-      updatedAt: saved.updatedAt,
-    };
-
-    this.taskCommentsRealtime.emitCommentCreated({
-      organizationId: input.contextOrganizationId,
-      taskId: saved.taskId,
-      payload,
-    });
-
-    // Envoyer des notifications aux personnes concernées (assigné, créateur, manager)
-    this.sendTaskCommentNotifications(saved.taskId, input.userId, authorName, content, input.contextOrganizationId)
-      .catch(err => console.error('[ProjectsService] Error sending task comment notifications:', err));
-
-    return payload;
-  }
-
-  private async sendTaskCommentNotifications(
-    taskId: string,
-    authorId: string,
-    authorName: string | null,
-    content: string,
-    organizationId: string,
-  ) {
-    const task = await this.tasksRepo.findOne({
-      where: { id: taskId },
-      relations: ['project'],
-    });
-
-    if (!task) return;
-
-    const recipientIds = new Set<string>();
-    if (task.assigneeId && task.assigneeId !== authorId) recipientIds.add(task.assigneeId);
-    if (task.createdBy && task.createdBy !== authorId) recipientIds.add(task.createdBy);
-    if (task.project?.managerId && task.project.managerId !== authorId) recipientIds.add(task.project.managerId);
-    if (task.project?.createdBy && task.project.createdBy !== authorId) recipientIds.add(task.project.createdBy);
-
-    // Ajouter le chef de département
-    if (task.project?.departmentId) {
-      const deptManagers = await this.projectsRepo.manager.query(
-        `
-        SELECT dm.user_id
-        FROM module_c_rh.department_managers dm
-        WHERE dm.department_id = $1
-        `,
-        [task.project.departmentId],
-      );
-      for (const row of deptManagers || []) {
-        if (row.user_id && row.user_id !== authorId) {
-          recipientIds.add(row.user_id);
-        }
-      }
-    }
-
-    const title = `Nouveau message sur la tâche: ${task.title}`;
-    const body = `${authorName || 'Quelqu\'un'} a dit : ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`;
-
-    for (const recipientId of recipientIds) {
-      // In-App
-      await this.inAppNotificationService.create({
-        userId: recipientId,
-        organizationId,
-        title,
-        message: body,
-        type: 'task_comment',
-        data: { taskId, authorId },
-      }).catch(() => { });
-
-      // FCM (Push)
-      await this.fcmService.sendToUser(recipientId, title, body, {
-        type: 'task_comment',
-        taskId,
-      }).catch(() => { });
-    }
   }
 
   private async assertTaskReadableOrThrow(input: {
@@ -1820,7 +1614,8 @@ export class ProjectsService {
       .leftJoinAndSelect('t.assignee', 'a')
       .where('t.id = :id', { id: input.taskId });
 
-    const hasExplicitReadPermission = input.permissionCodes.some(p => p.startsWith('projects.task.read'));
+    const hasExplicitReadPermission = PROJECT_PERMISSIONS.TASK.READ.ALL_SCOPES
+      .some(code => input.permissionCodes.includes(code));
 
     if (!hasExplicitReadPermission) {
       // Permettre à l'assignee d'accéder à sa tâche
@@ -1860,6 +1655,30 @@ export class ProjectsService {
         { userId: input.userId },
       );
     } else if (readScope === 'department' || readScope === 'team') {
+      // For department/team scope, filter by user's department via RH context
+      // The task must belong to a project in the same department as the user
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1
+          FROM module_c_rh.employees e
+          WHERE e.user_id = :userId
+            AND e.organization_id = t.organization_id
+            AND (
+              e.department_id = (
+                SELECT p.department_id
+                FROM module_b_projects.projects p
+                WHERE p.id = t.project_id
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM module_b_projects.project_departments pd
+                WHERE pd.project_id = t.project_id
+                  AND pd.department_id = e.department_id
+              )
+            )
+        )`,
+        { userId: input.userId },
+      );
     }
 
     const task = await qb.getOne();
@@ -2038,7 +1857,9 @@ export class ProjectsService {
       throw new BadRequestException('Invalid projectId');
     }
 
-    const canCreateInProject = (input.permissionCodes ?? []).includes('projects.task.create.project');
+    const canCreateInProject = (input.permissionCodes ?? []).includes(
+      PROJECT_PERMISSIONS.TASK.CREATE.PROJECT,
+    );
     if (canCreateInProject) {
       await this.assertUserIsProjectManagerOrThrow({
         userId: input.userId,
@@ -2105,7 +1926,7 @@ export class ProjectsService {
           },
         );
       } catch (notifError) {
-        console.error('[createTask] Notification error (non-blocking):', notifError);
+        this.logger.error('[createTask] Notification error (non-blocking):', notifError);
       }
     }
 
@@ -2114,11 +1935,21 @@ export class ProjectsService {
       contextOrganizationId: input.contextOrganizationId,
     });
 
+    // Émission temps réel best-effort.
+    this.realtime.emitTaskCreated({
+      organizationId: input.contextOrganizationId,
+      projectId: saved.projectId,
+      taskId: saved.id,
+      title: saved.title,
+      status: saved.status ?? 'todo',
+      assigneeId: saved.assigneeId ?? null,
+    });
+
     return this.getTaskById({
       id: saved.id,
       userId: input.userId,
       contextOrganizationId: input.contextOrganizationId,
-      permissionCodes: ['projects.task.read.tenant'],
+      permissionCodes: [PROJECT_PERMISSIONS.TASK.READ.TENANT],
     });
   }
 
@@ -2209,6 +2040,17 @@ export class ProjectsService {
       contextOrganizationId: input.contextOrganizationId,
     });
 
+    // Émission temps réel best-effort avec liste des champs modifiés.
+    this.realtime.emitTaskUpdated({
+      organizationId: input.contextOrganizationId,
+      projectId: task.projectId,
+      taskId: input.id,
+      title: input.dto.title,
+      status: input.dto.status,
+      progress: input.dto.progress,
+      changedFields: Object.keys(patch),
+    });
+
     return this.getTaskById({
       id: input.id,
       userId: input.userId,
@@ -2222,11 +2064,17 @@ export class ProjectsService {
     contextOrganizationId: string;
     userId: string;
     permissionCodes: string[];
+    reason?: string;
   }) {
     const deleteScope = this.resolveTaskDeleteScope(input.permissionCodes);
 
+    // Filtrer les déjà soft-deleted pour éviter de re-supprimer.
     const task = await this.tasksRepo.findOne({
-      where: { id: input.id, organizationId: input.contextOrganizationId },
+      where: {
+        id: input.id,
+        organizationId: input.contextOrganizationId,
+        deletedAt: IsNull(),
+      },
     });
     if (!task) {
       throw new NotFoundException('Task not found');
@@ -2245,11 +2093,29 @@ export class ProjectsService {
       });
     }
 
-    await this.tasksRepo.delete({ id: input.id, organizationId: input.contextOrganizationId });
+    // Soft-delete (Sprint B) : on garde la ligne pour audit + rétention
+    // OHADA. La progression du projet est recalculée immédiatement après
+    // dans la même transaction pour cohérence.
+    await this.tasksRepo.manager.transaction(async (em) => {
+      await em.update(
+        this.tasksRepo.target,
+        { id: input.id, organizationId: input.contextOrganizationId },
+        {
+          deletedAt: new Date(),
+          deletedBy: input.userId,
+          deletionReason: input.reason ?? null,
+        } as any,
+      );
+      await this.recalcProjectProgressFromTasks({
+        projectId: task.projectId,
+        contextOrganizationId: input.contextOrganizationId,
+      });
+    });
 
-    await this.recalcProjectProgressFromTasks({
+    this.realtime.emitTaskDeleted({
+      organizationId: input.contextOrganizationId,
       projectId: task.projectId,
-      contextOrganizationId: input.contextOrganizationId,
+      taskId: input.id,
     });
   }
 
@@ -2373,48 +2239,35 @@ export class ProjectsService {
   }
 
   private resolveTaskReadScope(permissionCodes: string[]): TaskReadScope {
-    const set = new Set((permissionCodes ?? []).filter(Boolean));
-
-    if (set.has('projects.task.read.global')) return 'global';
-    if (set.has('projects.task.read.tenant')) return 'tenant';
-    if (set.has('projects.task.read.department')) return 'department';
-    if (set.has('projects.task.read.team')) return 'team';
-    if (set.has('projects.task.read.project')) return 'project';
-    if (set.has('projects.task.read.own')) return 'own';
-
-    return 'own';
+    const scope = resolveUserScope(
+      (permissionCodes ?? []).filter(Boolean),
+      PROJECT_PERMISSIONS.TASK.READ,
+    );
+    return (scope ?? 'own') as TaskReadScope;
   }
 
   private resolveTaskWriteScope(permissionCodes: string[]): TaskWriteScope {
-    const set = new Set((permissionCodes ?? []).filter(Boolean));
-
-    if (set.has('projects.task.write.global')) return 'global';
-    if (set.has('projects.task.write.tenant')) return 'tenant';
-    if (set.has('projects.task.write.department')) return 'department';
-    if (set.has('projects.task.write.team')) return 'team';
-    if (set.has('projects.task.write.project')) return 'project';
-    if (set.has('projects.task.write.own')) return 'own';
-
-    return 'own';
+    const scope = resolveUserScope(
+      (permissionCodes ?? []).filter(Boolean),
+      PROJECT_PERMISSIONS.TASK.WRITE,
+    );
+    return (scope ?? 'own') as TaskWriteScope;
   }
 
   private resolveTaskDeleteScope(permissionCodes: string[]): TaskDeleteScope {
-    const set = new Set((permissionCodes ?? []).filter(Boolean));
-    if (set.has('projects.task.delete.global')) return 'global';
-    if (set.has('projects.task.delete.tenant')) return 'tenant';
-    if (set.has('projects.task.delete.project')) return 'project';
-    if (set.has('projects.task.delete.own')) return 'own';
-    return 'own';
+    const scope = resolveUserScope(
+      (permissionCodes ?? []).filter(Boolean),
+      PROJECT_PERMISSIONS.TASK.DELETE,
+    );
+    return (scope ?? 'own') as TaskDeleteScope;
   }
 
   private resolveTaskValidateScope(permissionCodes: string[]): TaskValidateScope {
-    const set = new Set((permissionCodes ?? []).filter(Boolean));
-    if (set.has('projects.task.validate.global')) return 'global';
-    if (set.has('projects.task.validate.tenant')) return 'tenant';
-    if (set.has('projects.task.validate.department')) return 'department';
-    if (set.has('projects.task.validate.team')) return 'team';
-    if (set.has('projects.task.validate.project')) return 'project';
-    return 'team';
+    const scope = resolveUserScope(
+      (permissionCodes ?? []).filter(Boolean),
+      PROJECT_PERMISSIONS.TASK.VALIDATE,
+    );
+    return (scope ?? 'team') as TaskValidateScope;
   }
 
   private async assertUserIsProjectMemberOrThrow(input: {
@@ -2422,24 +2275,7 @@ export class ProjectsService {
     contextOrganizationId: string;
     projectId: string;
   }): Promise<void> {
-    const rows = (await this.tasksRepo.manager.query(
-      `
-      SELECT 1 AS ok
-      FROM module_b_projects.projects p
-      LEFT JOIN module_b_projects.project_members pm
-        ON pm.project_id = p.id
-       AND pm.user_id = $1
-      WHERE p.id = $2
-        AND p.organization_id = $3
-        AND (pm.user_id IS NOT NULL OR p.created_by = $1)
-      LIMIT 1
-      `,
-      [input.userId, input.projectId, input.contextOrganizationId],
-    )) as Array<{ ok?: number }>;
-
-    if (!rows[0]?.ok) {
-      throw new ForbiddenException('User is not a member of this project');
-    }
+    await this.assertProjectMembershipOrThrow({ ...input, requireManager: false });
   }
 
   private async assertUserIsProjectManagerOrThrow(input: {
@@ -2447,6 +2283,23 @@ export class ProjectsService {
     contextOrganizationId: string;
     projectId: string;
   }): Promise<void> {
+    await this.assertProjectMembershipOrThrow({ ...input, requireManager: true });
+  }
+
+  /**
+   * Unified method for project membership verification.
+   * If requireManager is true, checks for manager role; otherwise checks for any member.
+   */
+  private async assertProjectMembershipOrThrow(input: {
+    userId: string;
+    contextOrganizationId: string;
+    projectId: string;
+    requireManager: boolean;
+  }): Promise<void> {
+    const managerCondition = input.requireManager
+      ? `AND (p.created_by = $1 OR (pm.user_id IS NOT NULL AND pm.role_in_project = 'MANAGER'))`
+      : `AND (pm.user_id IS NOT NULL OR p.created_by = $1)`;
+
     const rows = (await this.tasksRepo.manager.query(
       `
       SELECT 1 AS ok
@@ -2456,20 +2309,17 @@ export class ProjectsService {
        AND pm.user_id = $1
       WHERE p.id = $2
         AND p.organization_id = $3
-        AND (
-          p.created_by = $1
-          OR (
-            pm.user_id IS NOT NULL
-            AND pm.role_in_project = 'MANAGER'
-          )
-        )
+        ${managerCondition}
       LIMIT 1
       `,
       [input.userId, input.projectId, input.contextOrganizationId],
     )) as Array<{ ok?: number }>;
 
     if (!rows[0]?.ok) {
-      throw new ForbiddenException('User is not a manager of this project');
+      const errorMsg = input.requireManager
+        ? 'User is not a manager of this project'
+        : 'User is not a member of this project';
+      throw new ForbiddenException(errorMsg);
     }
   }
 
@@ -2719,8 +2569,7 @@ export class ProjectsService {
         );
       }
 
-      // eslint-disable-next-line no-console
-      console.error('[projects] control-tower failed', err);
+      this.logger.error('[projects] control-tower failed', err);
       throw new InternalServerErrorException('Erreur interne chargement tour de contrôle');
     }
 
@@ -2762,50 +2611,41 @@ export class ProjectsService {
     userId: string;
     permissionCodes: string[];
   }): Promise<{ ok: boolean; taskId: string; assigneeId: string | null; assigneeName: string | null }> {
-    console.log('[updateTaskAssignee] Input:', JSON.stringify(input));
-
     const task = await this.tasksRepo.findOne({
-      where: { id: input.taskId },
+      where: { id: input.taskId, organizationId: input.contextOrganizationId },
       relations: ['project', 'assignee'],
     });
-
-    console.log('[updateTaskAssignee] Task found:', task ? { id: task.id, projectId: task.projectId, assigneeId: task.assigneeId } : null);
 
     if (!task) {
       throw new NotFoundException('Task not found');
     }
 
-    const hasWritePermission = input.permissionCodes.some((p) =>
-      p.startsWith('projects.task.write.'),
+    const hasWritePermission = PROJECT_PERMISSIONS.TASK.WRITE.ALL_SCOPES.some(code =>
+      input.permissionCodes.includes(code),
     );
 
     if (!hasWritePermission) {
-      throw new ForbiddenException('Voun avez pas les permissions ecriture');
+      throw new ForbiddenException('Vous n\'avez pas les permissions d\'écriture');
     }
 
     const oldAssigneeId = task.assigneeId;
     const newAssigneeId = input.assigneeId;
 
-    // 3. Si un nouvel assigné est spécifié, vérifier qu'il est membre du projet
+    // Si un nouvel assigné est spécifié, vérifier qu'il est membre du projet
     if (newAssigneeId) {
-      console.log('[updateTaskAssignee] Checking if user is project member:', { projectId: task.projectId, newAssigneeId });
       const isMember = await this.projectMembersRepo.findOne({
         where: { projectId: task.projectId, userId: newAssigneeId },
       });
-
-      console.log('[updateTaskAssignee] Is member:', !!isMember);
 
       if (!isMember) {
         throw new BadRequestException('The specified user is not a member of this project');
       }
     }
 
-    // 4. Mettre à jour l'assigné
-    console.log('[updateTaskAssignee] Updating task assignee from', oldAssigneeId, 'to', newAssigneeId);
+    // Mettre à jour l'assigné
     task.assigneeId = newAssigneeId;
     task.updatedAt = new Date();
     await this.tasksRepo.save(task);
-    console.log('[updateTaskAssignee] Task saved successfully');
 
     // 5. Récupérer les infos pour les notifications
     const taskWithProject = await this.tasksRepo.findOne({
@@ -2817,7 +2657,7 @@ export class ProjectsService {
     const assigneeName = taskWithProject?.assignee
       ? `${taskWithProject.assignee.firstName} ${taskWithProject.assignee.lastName}`.trim()
       : null;
- 
+
     if (newAssigneeId && newAssigneeId !== oldAssigneeId) {
       this.eventEmitter.emit('task.assigned', {
         taskId: input.taskId,
@@ -2829,8 +2669,17 @@ export class ProjectsService {
         organizationId: input.contextOrganizationId,
         triggeredBy: input.userId,
       });
+
+      // Émission realtime symétrique aux events HR
+      this.realtime.emitTaskAssigned({
+        organizationId: input.contextOrganizationId,
+        projectId: task.projectId,
+        taskId: input.taskId,
+        assigneeId: newAssigneeId,
+        previousAssigneeId: oldAssigneeId,
+      });
     }
- 
+
     if (oldAssigneeId && oldAssigneeId !== newAssigneeId) {
       this.eventEmitter.emit('task.unassigned', {
         taskId: input.taskId,

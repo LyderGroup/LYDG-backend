@@ -10,6 +10,7 @@ import {
 import { Organization } from '../../organizations/organizations.entity';
 import { HrDepartment } from './department.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_c_rh', name: 'job_positions' })
 export class JobPosition {
   @PrimaryGeneratedColumn('uuid')
@@ -47,10 +48,12 @@ export class JobPosition {
   @Column({ type: 'varchar', length: 50, name: 'salary_grade', nullable: true })
   salaryGrade!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'min_salary', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'min_salary', nullable: true })
   minSalary!: number | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'max_salary', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'max_salary', nullable: true })
   maxSalary!: number | null;
 
   @Column({ type: 'boolean', name: 'is_active', default: true })

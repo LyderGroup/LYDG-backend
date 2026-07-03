@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ROLES_KEY, SYSTEM_ROLE } from './roles.decorator';
+import { ROLES_KEY } from './roles.decorator';
 import { RbacService } from './rbac.service';
 
 @Injectable()
@@ -8,7 +8,7 @@ export class RolesGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly rbacService: RbacService,
-  ) {}
+  ) { }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
@@ -39,26 +39,10 @@ export class RolesGuard implements CanActivate {
       return false;
     }
 
-    const tenant = request.tenant as {id?: string | undefined};
+    const tenant = request.tenant as { id?: string | undefined };
     const organizationId = tenant?.id;
 
-    const wantsSystemRole = requiredRoles.includes(SYSTEM_ROLE);
-    const roleCodes = requiredRoles.filter((r) => r !== SYSTEM_ROLE);
-
-    if (wantsSystemRole) {
-      const hasSystemRole = await this.rbacService.userHasAnySystemRole(
-        userId,
-        organizationId,
-      );
-      if (hasSystemRole) {
-        return true;
-      }
-    }
-
-    if (!roleCodes.length) {
-      return false;
-    }
-
-    return this.rbacService.userHasAnyRole(userId, roleCodes, organizationId);
+    // Plus de rôle système - vérifier uniquement les rôles d'organisation
+    return this.rbacService.userHasAnyRole(userId, requiredRoles, organizationId);
   }
 }

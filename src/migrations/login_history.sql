@@ -1,6 +1,3 @@
--- Migration: Create login_history table
--- Description: Track user login history with device, browser, OS and IP information
-
 CREATE TABLE IF NOT EXISTS core.login_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES core.users(id) ON DELETE CASCADE,
@@ -13,8 +10,7 @@ CREATE TABLE IF NOT EXISTS core.login_history (
     failure_reason VARCHAR(255),
     login_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
--- Index for faster queries by user
+ 
 CREATE INDEX IF NOT EXISTS idx_login_history_user_id ON core.login_history(user_id);
 
 -- Index for sorting by login time

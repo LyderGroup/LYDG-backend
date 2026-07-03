@@ -9,6 +9,7 @@ import {
 import { Organization } from '../organizations/organizations.entity';
 import { Kpi } from './kpi.entity';
 
+import { numericTransformer } from '../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_a_pilotage', name: 'kpi_values' })
 export class KpiValue {
   @PrimaryGeneratedColumn('uuid')
@@ -37,14 +38,17 @@ export class KpiValue {
   @Column({ type: 'varchar', length: 20, name: 'period_type', nullable: true })
   periodType!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2 })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2 })
   value!: string;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'target_value', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'target_value', nullable: true })
   targetValue!: string | null;
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 15,
     scale: 2,
     nullable: true,
@@ -55,6 +59,7 @@ export class KpiValue {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'variance_percentage',
@@ -64,10 +69,12 @@ export class KpiValue {
   })
   variancePercentage!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'warning_threshold', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'warning_threshold', nullable: true })
   warningThreshold!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'critical_threshold', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'critical_threshold', nullable: true })
   criticalThreshold!: string | null;
 
   @Column({ type: 'varchar', length: 10, nullable: true })

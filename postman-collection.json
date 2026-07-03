@@ -1,0 +1,269 @@
+{
+  "info": {
+    "name": "LYD - Public Careers API",
+    "description": "Tests pour l'API publique des offres d'emploi (liveydream.com)\n\nAucune authentification requise. Multi-tenant : chaque candidature est rattachée à l'organisation propriétaire de l'offre.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "slug",
+      "value": "software-engineer",
+      "type": "string",
+      "description": "Slug d'une offre publiée. À mettre à jour après le 1er GET /jobs."
+    },
+    {
+      "key": "deviceFingerprint",
+      "value": "test-fingerprint-postman-001",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. GET /public/careers/jobs (liste)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs?page=1&limit=20",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "20" },
+            { "key": "search", "value": "engineer", "disabled": true },
+            { "key": "employmentType", "value": "FULL_TIME", "disabled": true },
+            { "key": "experienceLevel", "value": "SENIOR", "disabled": true },
+            { "key": "sort", "value": "publishedAt:DESC", "disabled": true },
+            { "key": "organizationCode", "value": "LYDG", "disabled": true }
+          ]
+        },
+        "description": "Liste paginée des offres publiées (visibility_state='published')."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Structure data + meta', () => {",
+              "  pm.expect(body).to.have.property('data');",
+              "  pm.expect(body).to.have.property('meta');",
+              "});",
+              "if (body.data && body.data.length > 0) {",
+              "  pm.collectionVariables.set('slug', body.data[0].slug);",
+              "  console.log('Slug sauvegardé:', body.data[0].slug);",
+              "}",
+              "pm.test('Pas d\\'UUID exposé', () => {",
+              "  if (body.data.length > 0) pm.expect(body.data[0]).to.not.have.property('id');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. GET /public/careers/jobs/:slug (detail)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs", "{{slug}}"]
+        },
+        "description": "Détail d'une offre par slug. 404 si non publiée, 410 si fermée."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Canonical URL → liveydream.com', () => {",
+              "  pm.expect(body.meta.canonicalUrl).to.include('liveydream.com');",
+              "});",
+              "pm.test('Pas d\\'UUID, pas de organizationId', () => {",
+              "  pm.expect(body).to.not.have.property('id');",
+              "  pm.expect(body).to.not.have.property('organizationId');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. POST /public/careers/jobs/:slug/apply (OK)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Device-Fingerprint", "value": "{{deviceFingerprint}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Marie Dupont\",\n  \"email\": \"marie.dupont+{{$randomInt}}@example.com\",\n  \"phone\": \"+33612345678\",\n  \"coverLetter\": \"Je suis très intéressée par ce poste. Mon expérience correspond parfaitement aux besoins de votre équipe.\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/marie-dupont.pdf\",\n  \"cvMimeType\": \"application/pdf\",\n  \"cvSizeBytes\": 524288,\n  \"websiteField\": \"\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs", "{{slug}}", "apply"]
+        },
+        "description": "Soumet une candidature. Rate limit: 5/min/IP + max 10/24h/IP."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 201', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('Réponse complète', () => {",
+              "  pm.expect(body.success).to.eql(true);",
+              "  pm.expect(body).to.have.property('applicationId');",
+              "  pm.expect(body).to.have.property('candidateId');",
+              "  pm.expect(body.trackingUrl).to.include('liveydream.com');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. POST apply — HONEYPOT (doit rejeter 400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Device-Fingerprint", "value": "{{deviceFingerprint}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Bot Spammer\",\n  \"email\": \"bot@spam.com\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/bot.pdf\",\n  \"websiteField\": \"https://spam.com\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs", "{{slug}}", "apply"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 400 (honeypot)', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. POST apply — CV non-PDF (doit rejeter 400)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Test User\",\n  \"email\": \"test@example.com\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/file.exe\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs", "{{slug}}", "apply"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 400 (extension CV)', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. POST apply — URL HTTP (pas HTTPS, doit rejeter)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Test User\",\n  \"email\": \"test@example.com\",\n  \"cvUrl\": \"http://insecure.com/cv.pdf\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs", "{{slug}}", "apply"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 400 (HTTPS requis)', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. POST apply — Doublon (doit rejeter 409)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Marie Dupont\",\n  \"email\": \"marie.dupont@example.com\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/marie.pdf\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs", "{{slug}}", "apply"]
+        },
+        "description": "Exécute 2x cette requête. Le second appel doit retourner 409 Conflict."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 201 ou 409', () => pm.expect([201, 409]).to.include(pm.response.code));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. GET slug inexistant (doit retourner 404)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/public/careers/jobs/this-slug-does-not-exist-12345",
+          "host": ["{{baseUrl}}"],
+          "path": ["public", "careers", "jobs", "this-slug-does-not-exist-12345"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 404', () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

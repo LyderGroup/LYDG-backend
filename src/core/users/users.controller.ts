@@ -5,50 +5,98 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsString, IsEmail, IsOptional, IsBoolean, IsEnum, IsArray } from 'class-validator';
 import { UsersService } from './users.service';
-import { RolesGuard } from '../rbac/roles.guard';
-import { Roles } from '../rbac/roles.decorator';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { RequirePermission } from '../rbac/require-permission.decorator';
+import { GLOBAL_PERMISSIONS } from '../global/global.permissions';
 
 class CreateUserDto {
+  @IsString()
   firstName!: string;
+
+  @IsString()
   lastName!: string;
+
+  @IsEmail()
   email!: string;
+
+  @IsString()
+  @IsOptional()
   phone!: string;
+
+  @IsString()
   department!: string;
+
+  @IsString()
   roleId!: string;
 }
 
 class UpdateUserDto {
+  @IsString()
+  @IsOptional()
   firstName?: string;
+
+  @IsString()
+  @IsOptional()
   lastName?: string;
+
+  @IsString()
+  @IsOptional()
   phone?: string | null;
+
+  @IsString()
+  @IsOptional()
+  gender?: string | null;
+
+  @IsString()
+  @IsOptional()
+  birthDate?: string | null;
+
+  @IsString()
+  @IsOptional()
   language?: string | null;
+
+  @IsString()
+  @IsOptional()
   timezone?: string | null;
+
+  @IsString()
+  @IsOptional()
   department?: string | null;
+
+  @IsBoolean()
+  @IsOptional()
   isActive?: boolean;
 }
 
 class BulkUserActionDto {
+  @IsEnum(['soft-delete', 'restore', 'activate', 'deactivate'])
   action!: 'soft-delete' | 'restore' | 'activate' | 'deactivate';
+
+  @IsArray()
+  @IsString({ each: true })
   ids!: string[];
 }
 
 class ChangeUserRoleDto {
+  @IsString()
   roleId!: string;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_READ_ALL)
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const query = req.query ?? {};
@@ -76,7 +124,7 @@ export class UsersController {
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_MANAGE)
   async create(@Req() req: any, @Body() dto: CreateUserDto) {
     const tenant = req.tenant;
     const currentUser = req.user;
@@ -112,17 +160,17 @@ export class UsersController {
   }
 
   @Get(':id/role')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
-  async getUserRole(@Req() req: any, @Param('id') id: string) {
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_READ_ALL)
+  async getUserRole(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.usersService.getActiveRoleForUser(tenant?.id as string, id);
   }
 
   @Patch(':id/role')
-  @Roles('SUPER_ADMIN')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_ASSIGN)
   async changeUserRole(
     @Req() req: any,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ChangeUserRoleDto,
   ) {
     const tenant = req.tenant as { id?: string } | undefined;
@@ -145,10 +193,10 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_MANAGE)
   async update(
     @Req() req: any,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserDto,
   ) {
     const tenant = req.tenant as { id?: string } | undefined;
@@ -162,6 +210,8 @@ export class UsersController {
         firstName: dto.firstName,
         lastName: dto.lastName,
         phone: dto.phone ?? undefined,
+        gender: dto.gender ?? undefined,
+        birthDate: dto.birthDate ?? undefined,
         language: dto.language ?? undefined,
         timezone: dto.timezone ?? undefined,
         department: dto.department ?? undefined,
@@ -170,9 +220,60 @@ export class UsersController {
     );
   }
 
+  // Profil de l'utilisateur courant (user + rôle actif + employé). Pas de
+  // permission requise au-delà de l'authentification : un user accède toujours
+  // à ses propres infos.
+  @Get('me/profile')
+  async getOwnProfile(@Req() req: any) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+
+    if (!currentUser?.id) {
+      throw new BadRequestException('Utilisateur non authentifié');
+    }
+    if (!tenant?.id) {
+      throw new BadRequestException('Contexte organisation manquant');
+    }
+
+    const profile = await this.usersService.findOwnProfile(tenant.id, currentUser.id);
+    if (!profile) {
+      throw new BadRequestException('Profil introuvable');
+    }
+    return profile;
+  }
+
+  // Endpoint pour que l'utilisateur modifie son propre profil (sans restriction de rôle)
+  @Patch('me/profile')
+  async updateOwnProfile(
+    @Req() req: any,
+    @Body() dto: UpdateUserDto,
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+
+    if (!currentUser?.id) {
+      throw new BadRequestException('Utilisateur non authentifié');
+    }
+
+    return this.usersService.updateForTenant(
+      tenant?.id as string,
+      currentUser.id,
+      (currentUser?.id as string) ?? null,
+      {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        phone: dto.phone ?? undefined,
+        gender: dto.gender ?? undefined,
+        birthDate: dto.birthDate ?? undefined,
+        language: dto.language ?? undefined,
+        timezone: dto.timezone ?? undefined,
+      },
+    );
+  }
+
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
-  async softDelete(@Req() req: any, @Param('id') id: string) {
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_DELETE)
+  async softDelete(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
 
@@ -186,8 +287,8 @@ export class UsersController {
   }
 
   @Post(':id/restore')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
-  async restore(@Req() req: any, @Param('id') id: string) {
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_MANAGE)
+  async restore(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
 
@@ -201,8 +302,8 @@ export class UsersController {
   }
 
   @Delete(':id/hard')
-  @Roles('SUPER_ADMIN')
-  async hardDelete(@Req() req: any, @Param('id') id: string) {
+  @RequirePermission(GLOBAL_PERMISSIONS.SYSTEM_ADMIN)
+  async hardDelete(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
 
     await this.usersService.hardDeleteForTenant(tenant?.id as string, id);
@@ -211,7 +312,7 @@ export class UsersController {
   }
 
   @Post('bulk')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_MANAGE)
   async bulk(@Req() req: any, @Body() dto: BulkUserActionDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -233,10 +334,10 @@ export class UsersController {
   }
 
   @Get(':id/login-history')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(GLOBAL_PERMISSIONS.USER_READ_ALL)
   async getLoginHistory(
     @Req() req: any,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     const tenant = req.tenant as { id?: string } | undefined;
     const query = req.query ?? {};

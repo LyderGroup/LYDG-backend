@@ -36,4 +36,15 @@ export class ProjectMember {
 
   @CreateDateColumn({ type: 'timestamp', name: 'joined_at' })
   joinedAt!: Date;
+
+  // ─── Soft-delete (Sprint B) ───────────────────────────────────────
+  @Column({ type: 'timestamp', name: 'deleted_at', nullable: true })
+  deletedAt!: Date | null;
+
+  @Column({ type: 'uuid', name: 'deleted_by', nullable: true })
+  deletedBy!: string | null;
+
+  @Column({ type: 'text', name: 'deletion_reason', nullable: true })
+  deletionReason!: string | null;
+
 }

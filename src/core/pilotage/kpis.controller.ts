@@ -10,8 +10,9 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { RolesGuard } from '../rbac/roles.guard';
-import { Roles, SYSTEM_ROLE } from '../rbac/roles.decorator';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { RequirePermission } from '../rbac/require-permission.decorator';
+import { PILOTAGE_MODULE_CODE, PILOTAGE_PERMISSIONS } from './pilotage.permissions';
 import { PilotageService } from './pilotage.service';
 
 class CreateKpiDto {
@@ -46,19 +47,20 @@ class UpdateKpiDto {
   displayOrder?: number;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/pilotage/kpis')
 export class KpisController {
-  constructor(private readonly pilotageService: PilotageService) {}
+  constructor(private readonly pilotageService: PilotageService) { }
 
   @Get()
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_KPIS_READ, { moduleCode: PILOTAGE_MODULE_CODE })
   async list(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.listKpisForTenant(tenant?.id as string);
   }
 
   @Post()
-  @Roles(SYSTEM_ROLE)
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_KPIS_CREATE, { moduleCode: PILOTAGE_MODULE_CODE })
   async create(@Req() req: any, @Body() dto: CreateKpiDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -78,7 +80,7 @@ export class KpisController {
   }
 
   @Patch(':id')
-  @Roles(SYSTEM_ROLE)
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_KPIS_UPDATE, { moduleCode: PILOTAGE_MODULE_CODE })
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateKpiDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -92,7 +94,7 @@ export class KpisController {
   }
 
   @Delete(':id')
-  @Roles(SYSTEM_ROLE)
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_KPIS_DELETE, { moduleCode: PILOTAGE_MODULE_CODE })
   async remove(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.pilotageService.deleteKpiForTenant(tenant?.id as string, id);

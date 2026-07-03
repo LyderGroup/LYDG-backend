@@ -11,45 +11,47 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsDateString, IsNumber, IsOptional, IsString } from 'class-validator';
 import { JobOpeningService } from '../services/job-opening.service';
 import { JobOpeningStatus } from '../entities/job-opening.entity';
-import { RolesGuard } from '../../rbac/roles.guard';
-import { Roles } from '../../rbac/roles.decorator';
+import { PermissionGuard } from '../../rbac/permission.guard';
+import { RequirePermission } from '../../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr.permissions';
 
 class CreateJobOpeningDto {
-  positionId?: string | null;
-  jobTitle!: string;
-  departmentId?: string | null;
-  jobDescription?: string | null;
-  employmentType?: string | null;
-  experienceLevel?: string | null;
-  salaryRangeMin?: number | null;
-  salaryRangeMax?: number | null;
-  currency?: string;
-  closingDate?: string | null;
+  @IsOptional() @IsString() positionId?: string | null;
+  @IsString() jobTitle!: string;
+  @IsOptional() @IsString() departmentId?: string | null;
+  @IsOptional() @IsString() jobDescription?: string | null;
+  @IsOptional() @IsString() employmentType?: string | null;
+  @IsOptional() @IsString() experienceLevel?: string | null;
+  @IsOptional() @IsNumber() salaryRangeMin?: number | null;
+  @IsOptional() @IsNumber() salaryRangeMax?: number | null;
+  @IsOptional() @IsString() currency?: string;
+  @IsOptional() @IsDateString() closingDate?: string | null;
 }
 
 class UpdateJobOpeningDto {
-  positionId?: string | null;
-  jobTitle?: string;
-  departmentId?: string | null;
-  jobDescription?: string | null;
-  employmentType?: string | null;
-  experienceLevel?: string | null;
-  salaryRangeMin?: number | null;
-  salaryRangeMax?: number | null;
-  currency?: string;
-  status?: string;
-  closingDate?: string | null;
+  @IsOptional() @IsString() positionId?: string | null;
+  @IsOptional() @IsString() jobTitle?: string;
+  @IsOptional() @IsString() departmentId?: string | null;
+  @IsOptional() @IsString() jobDescription?: string | null;
+  @IsOptional() @IsString() employmentType?: string | null;
+  @IsOptional() @IsString() experienceLevel?: string | null;
+  @IsOptional() @IsNumber() salaryRangeMin?: number | null;
+  @IsOptional() @IsNumber() salaryRangeMax?: number | null;
+  @IsOptional() @IsString() currency?: string;
+  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsDateString() closingDate?: string | null;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/hr/job-openings')
 export class JobOpeningController {
   constructor(private readonly service: JobOpeningService) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_READ, { moduleCode: 'module_c_rh' })
   async list(@Req() req: any, @Query() query: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const page = query.page ? parseInt(query.page as string, 10) : undefined;
@@ -62,7 +64,7 @@ export class JobOpeningController {
   }
 
   @Get(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_READ, { moduleCode: 'module_c_rh' })
   async findOne(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const item = await this.service.findOne(tenant?.id as string, id);
@@ -71,7 +73,7 @@ export class JobOpeningController {
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_WRITE, { moduleCode: 'module_c_rh' })
   async create(@Req() req: any, @Body() dto: CreateJobOpeningDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
@@ -92,7 +94,7 @@ export class JobOpeningController {
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_WRITE, { moduleCode: 'module_c_rh' })
   async update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateJobOpeningDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.update(tenant?.id as string, id, {
@@ -103,21 +105,28 @@ export class JobOpeningController {
   }
 
   @Post(':id/publish')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_MANAGE, { moduleCode: 'module_c_rh' })
   async publish(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.publish(tenant?.id as string, id);
   }
 
+  @Post(':id/unpublish')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_MANAGE, { moduleCode: 'module_c_rh' })
+  async unpublish(@Req() req: any, @Param('id') id: string) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    return this.service.unpublish(tenant?.id as string, id);
+  }
+
   @Post(':id/close')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_MANAGE, { moduleCode: 'module_c_rh' })
   async close(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.close(tenant?.id as string, id);
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(HR_PERMISSIONS.HR_RECRUITMENT_MANAGE, { moduleCode: 'module_c_rh' })
   async delete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.delete(tenant?.id as string, id);

@@ -1,0 +1,148 @@
+
+INSERT INTO core.permissions (code, resource, action, display_name, description, system_module_code, is_crud_action, created_at)
+VALUES
+  -- Projets
+  ('projects.project.read.own',          'projects.project', 'read.own',          'Lire ses propres projets',                 'Lire ses propres projets',                 'module_b_projects', false, NOW()),
+  ('projects.project.read.project',      'projects.project', 'read.project',      'Lire les projets dont je suis membre',     'Lire les projets dont je suis membre',     'module_b_projects', false, NOW()),
+  ('projects.project.read.team',         'projects.project', 'read.team',         'Lire les projets de mon équipe',           'Lire les projets de mon équipe',           'module_b_projects', false, NOW()),
+  ('projects.project.read.department',   'projects.project', 'read.department',   'Lire les projets de mon département',      'Lire les projets de mon département',      'module_b_projects', false, NOW()),
+  ('projects.project.read.tenant',       'projects.project', 'read.tenant',       'Lire tous les projets du tenant',          'Lire tous les projets du tenant',          'module_b_projects', false, NOW()),
+  ('projects.project.read.global',       'projects.project', 'read.global',       'Lire tous les projets (cross-tenant)',     'Lire tous les projets (cross-tenant)',     'module_b_projects', false, NOW()),
+  ('projects.project.create.tenant',     'projects.project', 'create.tenant',     'Créer un projet dans le tenant',           'Créer un projet dans le tenant',           'module_b_projects', false, NOW()),
+  ('projects.project.create.global',     'projects.project', 'create.global',     'Créer un projet (cross-tenant)',           'Créer un projet (cross-tenant)',           'module_b_projects', false, NOW()),
+  ('projects.project.update.own',        'projects.project', 'update.own',        'Modifier ses propres projets',             'Modifier ses propres projets',             'module_b_projects', false, NOW()),
+  ('projects.project.update.project',    'projects.project', 'update.project',    'Modifier un projet dont je suis membre',   'Modifier un projet dont je suis membre',   'module_b_projects', false, NOW()),
+  ('projects.project.update.tenant',     'projects.project', 'update.tenant',     'Modifier tous les projets du tenant',      'Modifier tous les projets du tenant',      'module_b_projects', false, NOW()),
+  ('projects.project.update.global',     'projects.project', 'update.global',     'Modifier tous les projets (cross-tenant)', 'Modifier tous les projets (cross-tenant)', 'module_b_projects', false, NOW()),
+  ('projects.project.delete.own',        'projects.project', 'delete.own',        'Supprimer ses propres projets',            'Supprimer ses propres projets',            'module_b_projects', false, NOW()),
+  ('projects.project.delete.project',    'projects.project', 'delete.project',    'Supprimer un projet dont je suis membre',  'Supprimer un projet dont je suis membre',  'module_b_projects', false, NOW()),
+  ('projects.project.delete.tenant',     'projects.project', 'delete.tenant',     'Supprimer un projet du tenant',            'Supprimer un projet du tenant',            'module_b_projects', false, NOW()),
+  ('projects.project.delete.global',     'projects.project', 'delete.global',     'Supprimer un projet (cross-tenant)',       'Supprimer un projet (cross-tenant)',       'module_b_projects', false, NOW()),
+  ('projects.project.export.tenant',     'projects.project', 'export.tenant',     'Exporter les projets du tenant',           'Exporter les projets du tenant',           'module_b_projects', false, NOW()),
+  ('projects.project.export.global',     'projects.project', 'export.global',     'Exporter les projets (cross-tenant)',      'Exporter les projets (cross-tenant)',      'module_b_projects', false, NOW()),
+  ('projects.project.join.tenant',       'projects.project', 'join.tenant',       'Rejoindre un projet du tenant',            'Rejoindre un projet du tenant',            'module_b_projects', false, NOW()),
+  ('projects.project.leave.own',         'projects.project', 'leave.own',         'Quitter un projet',                        'Quitter un projet',                        'module_b_projects', false, NOW()),
+
+  -- Tâches
+  ('projects.task.read.own',             'projects.task',    'read.own',          'Lire ses propres tâches',                  'Lire ses propres tâches',                  'module_b_projects', false, NOW()),
+  ('projects.task.read.project',         'projects.task',    'read.project',      'Lire les tâches du projet',                'Lire les tâches du projet',                'module_b_projects', false, NOW()),
+  ('projects.task.read.team',            'projects.task',    'read.team',         'Lire les tâches de mon équipe',            'Lire les tâches de mon équipe',            'module_b_projects', false, NOW()),
+  ('projects.task.read.department',      'projects.task',    'read.department',   'Lire les tâches de mon département',       'Lire les tâches de mon département',       'module_b_projects', false, NOW()),
+  ('projects.task.read.tenant',          'projects.task',    'read.tenant',       'Lire toutes les tâches du tenant',         'Lire toutes les tâches du tenant',         'module_b_projects', false, NOW()),
+  ('projects.task.read.global',          'projects.task',    'read.global',       'Lire toutes les tâches (cross-tenant)',    'Lire toutes les tâches (cross-tenant)',    'module_b_projects', false, NOW()),
+  ('projects.task.create.project',       'projects.task',    'create.project',    'Créer une tâche dans un projet',           'Créer une tâche dans un projet',           'module_b_projects', false, NOW()),
+  ('projects.task.create.tenant',        'projects.task',    'create.tenant',     'Créer une tâche dans le tenant',           'Créer une tâche dans le tenant',           'module_b_projects', false, NOW()),
+  ('projects.task.create.global',        'projects.task',    'create.global',     'Créer une tâche (cross-tenant)',           'Créer une tâche (cross-tenant)',           'module_b_projects', false, NOW()),
+  ('projects.task.write.own',            'projects.task',    'write.own',         'Modifier ses propres tâches',              'Modifier ses propres tâches',              'module_b_projects', false, NOW()),
+  ('projects.task.write.project',        'projects.task',    'write.project',     'Modifier les tâches du projet',            'Modifier les tâches du projet',            'module_b_projects', false, NOW()),
+  ('projects.task.write.team',           'projects.task',    'write.team',        'Modifier les tâches de mon équipe',        'Modifier les tâches de mon équipe',        'module_b_projects', false, NOW()),
+  ('projects.task.write.department',     'projects.task',    'write.department',  'Modifier les tâches de mon département',   'Modifier les tâches de mon département',   'module_b_projects', false, NOW()),
+  ('projects.task.write.tenant',         'projects.task',    'write.tenant',      'Modifier toutes les tâches du tenant',     'Modifier toutes les tâches du tenant',     'module_b_projects', false, NOW()),
+  ('projects.task.write.global',         'projects.task',    'write.global',      'Modifier toutes les tâches (cross-tenant)','Modifier toutes les tâches (cross-tenant)','module_b_projects', false, NOW()),
+  ('projects.task.update.own',           'projects.task',    'update.own',        'Mettre à jour ses tâches',                 'Mettre à jour ses tâches',                 'module_b_projects', false, NOW()),
+  ('projects.task.update.project',       'projects.task',    'update.project',    'Mettre à jour les tâches du projet',       'Mettre à jour les tâches du projet',       'module_b_projects', false, NOW()),
+  ('projects.task.update.team',          'projects.task',    'update.team',       'Mettre à jour tâches équipe',              'Mettre à jour tâches équipe',              'module_b_projects', false, NOW()),
+  ('projects.task.update.department',    'projects.task',    'update.department', 'Mettre à jour tâches département',         'Mettre à jour tâches département',         'module_b_projects', false, NOW()),
+  ('projects.task.update.tenant',        'projects.task',    'update.tenant',     'Mettre à jour toutes les tâches',          'Mettre à jour toutes les tâches',          'module_b_projects', false, NOW()),
+  ('projects.task.update.global',        'projects.task',    'update.global',     'Mettre à jour tâches cross-tenant',        'Mettre à jour tâches cross-tenant',        'module_b_projects', false, NOW()),
+  ('projects.task.delete.own',           'projects.task',    'delete.own',        'Supprimer ses tâches',                     'Supprimer ses tâches',                     'module_b_projects', false, NOW()),
+  ('projects.task.delete.project',       'projects.task',    'delete.project',    'Supprimer les tâches du projet',           'Supprimer les tâches du projet',           'module_b_projects', false, NOW()),
+  ('projects.task.delete.tenant',        'projects.task',    'delete.tenant',     'Supprimer les tâches du tenant',           'Supprimer les tâches du tenant',           'module_b_projects', false, NOW()),
+  ('projects.task.delete.global',        'projects.task',    'delete.global',     'Supprimer les tâches cross-tenant',        'Supprimer les tâches cross-tenant',        'module_b_projects', false, NOW()),
+  ('projects.task.validate.project',     'projects.task',    'validate.project',  'Valider les tâches du projet',             'Valider les tâches du projet',             'module_b_projects', false, NOW()),
+  ('projects.task.validate.team',        'projects.task',    'validate.team',     'Valider les tâches de mon équipe',         'Valider les tâches de mon équipe',         'module_b_projects', false, NOW()),
+  ('projects.task.validate.department',  'projects.task',    'validate.department','Valider les tâches du département',       'Valider les tâches du département',        'module_b_projects', false, NOW()),
+  ('projects.task.validate.tenant',      'projects.task',    'validate.tenant',   'Valider les tâches du tenant',             'Valider les tâches du tenant',             'module_b_projects', false, NOW()),
+  ('projects.task.validate.global',      'projects.task',    'validate.global',   'Valider les tâches cross-tenant',          'Valider les tâches cross-tenant',          'module_b_projects', false, NOW()),
+  ('projects.task.assign.project',       'projects.task',    'assign.project',    'Assigner les tâches du projet',            'Assigner les tâches du projet',            'module_b_projects', false, NOW()),
+  ('projects.task.assign.team',          'projects.task',    'assign.team',       'Assigner les tâches de mon équipe',        'Assigner les tâches de mon équipe',        'module_b_projects', false, NOW()),
+  ('projects.task.assign.tenant',        'projects.task',    'assign.tenant',     'Assigner les tâches du tenant',            'Assigner les tâches du tenant',            'module_b_projects', false, NOW()),
+  ('projects.task.export.tenant',        'projects.task',    'export.tenant',     'Exporter les tâches du tenant',            'Exporter les tâches du tenant',            'module_b_projects', false, NOW()),
+  ('projects.task.export.global',        'projects.task',    'export.global',     'Exporter les tâches cross-tenant',         'Exporter les tâches cross-tenant',         'module_b_projects', false, NOW()),
+  ('projects.task.control_tower.tenant', 'projects.task',    'control_tower.tenant','Tour de contrôle tenant',                 'Tour de contrôle tenant',                  'module_b_projects', false, NOW()),
+  ('projects.task.control_tower.global', 'projects.task',    'control_tower.global','Tour de contrôle cross-tenant',           'Tour de contrôle cross-tenant',            'module_b_projects', false, NOW()),
+
+  -- Sous-tâches
+  ('projects.subtask.read.own',          'projects.subtask', 'read.own',          'Lire ses sous-tâches',                     'Lire ses sous-tâches',                     'module_b_projects', false, NOW()),
+  ('projects.subtask.read.project',      'projects.subtask', 'read.project',      'Lire les sous-tâches du projet',           'Lire les sous-tâches du projet',           'module_b_projects', false, NOW()),
+  ('projects.subtask.read.tenant',       'projects.subtask', 'read.tenant',       'Lire toutes les sous-tâches',              'Lire toutes les sous-tâches',              'module_b_projects', false, NOW()),
+  ('projects.subtask.write.own',         'projects.subtask', 'write.own',         'Modifier ses sous-tâches',                 'Modifier ses sous-tâches',                 'module_b_projects', false, NOW()),
+  ('projects.subtask.write.project',     'projects.subtask', 'write.project',     'Modifier les sous-tâches du projet',       'Modifier les sous-tâches du projet',       'module_b_projects', false, NOW()),
+  ('projects.subtask.write.tenant',      'projects.subtask', 'write.tenant',      'Modifier toutes les sous-tâches',          'Modifier toutes les sous-tâches',          'module_b_projects', false, NOW()),
+  ('projects.subtask.delete.own',        'projects.subtask', 'delete.own',        'Supprimer ses sous-tâches',                'Supprimer ses sous-tâches',                'module_b_projects', false, NOW()),
+  ('projects.subtask.delete.project',    'projects.subtask', 'delete.project',    'Supprimer les sous-tâches du projet',      'Supprimer les sous-tâches du projet',      'module_b_projects', false, NOW()),
+  ('projects.subtask.delete.tenant',     'projects.subtask', 'delete.tenant',     'Supprimer toutes les sous-tâches',         'Supprimer toutes les sous-tâches',         'module_b_projects', false, NOW()),
+
+  -- Commentaires
+  ('projects.comment.read.own',          'projects.comment', 'read.own',          'Lire ses commentaires',                    'Lire ses commentaires',                    'module_b_projects', false, NOW()),
+  ('projects.comment.read.project',      'projects.comment', 'read.project',      'Lire les commentaires du projet',          'Lire les commentaires du projet',          'module_b_projects', false, NOW()),
+  ('projects.comment.read.tenant',       'projects.comment', 'read.tenant',       'Lire tous les commentaires',               'Lire tous les commentaires',               'module_b_projects', false, NOW()),
+  ('projects.comment.write.own',         'projects.comment', 'write.own',         'Écrire ses commentaires',                  'Écrire ses commentaires',                  'module_b_projects', false, NOW()),
+  ('projects.comment.write.project',     'projects.comment', 'write.project',     'Écrire dans les commentaires du projet',   'Écrire dans les commentaires du projet',   'module_b_projects', false, NOW()),
+  ('projects.comment.write.tenant',      'projects.comment', 'write.tenant',      'Écrire dans tous les commentaires',        'Écrire dans tous les commentaires',        'module_b_projects', false, NOW()),
+  ('projects.comment.delete.own',        'projects.comment', 'delete.own',        'Supprimer ses commentaires',               'Supprimer ses commentaires',               'module_b_projects', false, NOW()),
+  ('projects.comment.delete.project',    'projects.comment', 'delete.project',    'Supprimer les commentaires du projet',     'Supprimer les commentaires du projet',     'module_b_projects', false, NOW()),
+  ('projects.comment.delete.tenant',     'projects.comment', 'delete.tenant',     'Supprimer tous les commentaires',          'Supprimer tous les commentaires',          'module_b_projects', false, NOW()),
+
+  -- Membres
+  ('projects.member.read.project',       'projects.member',  'read.project',      'Voir les membres du projet',               'Voir les membres du projet',               'module_b_projects', false, NOW()),
+  ('projects.member.read.tenant',        'projects.member',  'read.tenant',       'Voir tous les membres',                    'Voir tous les membres',                    'module_b_projects', false, NOW()),
+  ('projects.member.read.global',        'projects.member',  'read.global',       'Voir tous les membres (cross-tenant)',     'Voir tous les membres (cross-tenant)',     'module_b_projects', false, NOW()),
+  ('projects.member.add.project',        'projects.member',  'add.project',       'Ajouter membre au projet',                 'Ajouter membre au projet',                 'module_b_projects', false, NOW()),
+  ('projects.member.add.tenant',         'projects.member',  'add.tenant',        'Ajouter membre (n''importe quel projet)',  'Ajouter membre (n''importe quel projet)',  'module_b_projects', false, NOW()),
+  ('projects.member.remove.project',     'projects.member',  'remove.project',    'Retirer membre du projet',                 'Retirer membre du projet',                 'module_b_projects', false, NOW()),
+  ('projects.member.remove.tenant',      'projects.member',  'remove.tenant',     'Retirer membre (n''importe quel projet)',  'Retirer membre (n''importe quel projet)',  'module_b_projects', false, NOW()),
+
+  -- Dépendances
+  ('projects.dependency.read.project',   'projects.dependency','read.project',    'Voir les dépendances du projet',           'Voir les dépendances du projet',           'module_b_projects', false, NOW()),
+  ('projects.dependency.read.tenant',    'projects.dependency','read.tenant',     'Voir toutes les dépendances',              'Voir toutes les dépendances',              'module_b_projects', false, NOW()),
+  ('projects.dependency.write.project',  'projects.dependency','write.project',   'Gérer les dépendances du projet',          'Gérer les dépendances du projet',          'module_b_projects', false, NOW()),
+  ('projects.dependency.write.tenant',   'projects.dependency','write.tenant',    'Gérer toutes les dépendances',             'Gérer toutes les dépendances',             'module_b_projects', false, NOW()),
+
+  -- Workflow
+  ('projects.workflow.read.project',     'projects.workflow','read.project',      'Voir workflow projet',                     'Voir workflow projet',                     'module_b_projects', false, NOW()),
+  ('projects.workflow.read.tenant',      'projects.workflow','read.tenant',       'Voir tous les workflows',                  'Voir tous les workflows',                  'module_b_projects', false, NOW()),
+  ('projects.workflow.manage.project',   'projects.workflow','manage.project',    'Gérer workflow projet',                    'Gérer workflow projet',                    'module_b_projects', false, NOW()),
+  ('projects.workflow.manage.tenant',    'projects.workflow','manage.tenant',     'Gérer tous les workflows',                 'Gérer tous les workflows',                 'module_b_projects', false, NOW()),
+
+  -- Rapports
+  ('projects.reports.read.tenant',       'projects.reports', 'read.tenant',       'Voir rapports tenant',                     'Voir rapports tenant',                     'module_b_projects', false, NOW()),
+  ('projects.reports.read.global',       'projects.reports', 'read.global',       'Voir rapports cross-tenant',               'Voir rapports cross-tenant',               'module_b_projects', false, NOW()),
+  ('projects.reports.export.tenant',     'projects.reports', 'export.tenant',     'Exporter rapports tenant',                 'Exporter rapports tenant',                 'module_b_projects', false, NOW()),
+  ('projects.reports.export.global',     'projects.reports', 'export.global',     'Exporter rapports cross-tenant',           'Exporter rapports cross-tenant',           'module_b_projects', false, NOW()),
+
+  -- Paramètres
+  ('projects.settings.read.tenant',      'projects.settings','read.tenant',       'Voir paramètres module',                   'Voir paramètres module',                   'module_b_projects', false, NOW()),
+  ('projects.settings.read.global',      'projects.settings','read.global',       'Voir paramètres module (cross-tenant)',    'Voir paramètres module (cross-tenant)',    'module_b_projects', false, NOW()),
+  ('projects.settings.manage.tenant',    'projects.settings','manage.tenant',     'Gérer paramètres module',                  'Gérer paramètres module',                  'module_b_projects', false, NOW()),
+  ('projects.settings.manage.global',    'projects.settings','manage.global',     'Gérer paramètres module (cross-tenant)',   'Gérer paramètres module (cross-tenant)',   'module_b_projects', false, NOW())
+ON CONFLICT (code) DO NOTHING;
+
+-- ─── Anciens codes legacy (rétro-compat, déjà partiellement seedés) ───
+INSERT INTO core.permissions (code, resource, action, display_name, description, system_module_code, is_crud_action, created_at)
+VALUES
+  ('project.create',              'project',          'create',         'Créer un projet (legacy)',                  'Créer un projet',                                 'module_b_projects', true,  NOW()),
+  ('project.create.all',          'project',          'create.all',     'Créer projets dans toutes les orgs',        'Créer projets dans toutes les orgs',              'module_b_projects', false, NOW()),
+  ('project.read',                'project',          'read',           'Lire projets (legacy)',                     'Lire projets',                                    'module_b_projects', true,  NOW()),
+  ('project.read.own',            'project',          'read.own',       'Lire ses projets (legacy)',                 'Lire ses projets',                                'module_b_projects', false, NOW()),
+  ('project.read.all',            'project',          'read.all',       'Lire tous les projets (legacy)',            'Lire tous les projets',                           'module_b_projects', false, NOW()),
+  ('project.edit',                'project',          'edit',           'Modifier projets (legacy)',                 'Modifier projets',                                'module_b_projects', true,  NOW()),
+  ('project.edit.own',            'project',          'edit.own',       'Modifier ses projets (legacy)',             'Modifier ses projets',                            'module_b_projects', false, NOW()),
+  ('project.delete',              'project',          'delete',         'Supprimer projets (legacy)',                'Supprimer projets',                               'module_b_projects', true,  NOW()),
+  ('project.export',              'project',          'export',         'Exporter projets (legacy)',                 'Exporter projets',                                'module_b_projects', false, NOW()),
+  ('project.task.create',         'project.task',     'create',         'Créer tâche (legacy)',                      'Créer tâche',                                     'module_b_projects', true,  NOW()),
+  ('project.task.read',           'project.task',     'read',           'Lire tâches (legacy)',                      'Lire tâches',                                     'module_b_projects', true,  NOW()),
+  ('project.task.edit',           'project.task',     'edit',           'Modifier tâches (legacy)',                  'Modifier tâches',                                 'module_b_projects', true,  NOW()),
+  ('project.task.delete',         'project.task',     'delete',         'Supprimer tâches (legacy)',                 'Supprimer tâches',                                'module_b_projects', true,  NOW()),
+  ('project.task.manage',         'project.task',     'manage',         'Gérer toutes les tâches (legacy)',          'Gérer toutes les tâches',                         'module_b_projects', false, NOW()),
+  ('project.task.assign',         'project.task',     'assign',         'Assigner tâches (legacy)',                  'Assigner tâches',                                 'module_b_projects', false, NOW()),
+  ('project.workflow.validate',   'project.workflow', 'validate',       'Valider workflow (legacy)',                 'Valider workflow',                                'module_b_projects', false, NOW()),
+  ('project.workflow.manage',     'project.workflow', 'manage',         'Gérer workflow (legacy)',                   'Gérer workflow',                                  'module_b_projects', false, NOW()),
+  ('project.members.read',        'project.members',  'read',           'Lire membres (legacy)',                     'Lire membres',                                    'module_b_projects', true,  NOW()),
+  ('project.members.read.all',    'project.members',  'read.all',       'Lire tous les membres (legacy)',            'Lire tous les membres',                           'module_b_projects', false, NOW()),
+  ('project.members.add',         'project.members',  'add',            'Ajouter membre (legacy)',                   'Ajouter membre',                                  'module_b_projects', false, NOW()),
+  ('project.members.remove',      'project.members',  'remove',         'Retirer membre (legacy)',                   'Retirer membre',                                  'module_b_projects', false, NOW()),
+  ('project.reports.read',        'project.reports',  'read',           'Lire rapports (legacy)',                    'Lire rapports',                                   'module_b_projects', true,  NOW()),
+  ('project.reports.export',      'project.reports',  'export',         'Exporter rapports (legacy)',                'Exporter rapports',                               'module_b_projects', false, NOW()),
+  ('project.settings.manage',     'project.settings', 'manage',         'Gérer paramètres (legacy)',                 'Gérer paramètres',                                'module_b_projects', false, NOW())
+ON CONFLICT (code) DO NOTHING;

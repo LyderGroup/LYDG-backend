@@ -11,6 +11,7 @@ import { Organization } from '../organizations/organizations.entity';
 import { User } from '../users/user.entity';
 import { StrategicObjective } from './strategic-objective.entity';
 
+import { numericTransformer } from '../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_a_pilotage', name: 'kpis' })
 export class Kpi {
   @PrimaryGeneratedColumn('uuid')
@@ -48,13 +49,16 @@ export class Kpi {
   @Column({ type: 'varchar', length: 10, nullable: true })
   direction!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'target_value', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'target_value', nullable: true })
   targetValue!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'warning_threshold', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'warning_threshold', nullable: true })
   warningThreshold!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'critical_threshold', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'critical_threshold', nullable: true })
   criticalThreshold!: string | null;
 
   @Column({ type: 'boolean', name: 'is_active', default: true })

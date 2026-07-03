@@ -1,35 +1,33 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { Employee } from './employee.entity';
+import { EmployeeProfile } from './employee-profile.entity';
+import { Department } from '../departments/department.entity';
+import { User } from '../users/user.entity';
+import { Organization } from '../organizations/organizations.entity';
 import {
-  // Organisation RH
   HrDepartment,
   JobPosition,
-  // Congés
   LeaveType,
   LeaveBalance,
   LeaveRequest,
-  // Présence
+  LeaveDeductionHistory,
   Attendance,
   OfficeAttendance,
-  // Compétences
   Skill,
   EmployeeSkill,
-  // Performance
   PerformanceReview,
-  // Formation
-  Training,
-  TrainingEnrollment,
-  // Recrutement
   JobOpening,
   Candidate,
   JobApplication,
-  // Règlements et signatures
   InternalRegulation,
   RegulationDocument,
   EmployeeRegulationAssignment,
   ElectronicSignature,
-  // KPIs et évaluations
+  HrDocument,
+  HrDocumentAssignment,
+  HrDocumentTypeConfig,
   Kpi,
   KpiWeight,
   MonthlyEvaluation,
@@ -41,10 +39,29 @@ import {
   EmployeeBonus,
   // Sanctions
   EmployeeSanction,
+  // Questions Gardien
+  GuardianQuestion,
+  // Journal de bord
+  DailyJournal,
+  // Initiation nouveaux membres
+  EmployeeInitiation,
   // SAV RH
   HrTicket,
   HrTicketComment,
   HrTicketCategory,
+  // Rituels d'entreprise
+  CompanyRitual,
+  RitualOccurrence,
+  RitualParticipant,
+  // Géofencing
+  GeofenceZone,
+  // Événements internes
+  InternalEvent,
+  // Planification salaires
+  SalarySchedule,
+  SalaryPayment,
+  // Documents obligatoires
+  EmployeeRequiredDocument,
 } from './entities';
 import { HrService } from './hr.service';
 import { HrController } from './hr.controller';
@@ -54,15 +71,35 @@ import {
   JobPositionController,
   LeaveTypeController,
   LeaveRequestController,
-  TrainingController,
   JobOpeningController,
   CandidateController,
   PerformanceReviewController,
+  SanctionController,
+  GuardianQuestionController,
+  DailyJournalController,
+  EmployeeInitiationController,
   // Controllers existants
   RegulationController,
   EvaluationController,
   HrTicketController,
   AttendanceController,
+  // Rituels
+  CompanyRitualController,
+  // Géofencing
+  GeofenceController,
+  // Documents RH
+  HrDocumentController,
+  HrDocumentTypeController,
+  // Salaires
+  SalaryController,
+  // Événements internes
+  InternalEventController,
+  // Planification salaires
+  SalaryScheduleController,
+  // Bonus
+  BonusController,
+  // Documents obligatoires
+  RequiredDocumentsController,
 } from './controllers';
 import {
   // Nouveaux services
@@ -70,22 +107,65 @@ import {
   JobPositionService,
   LeaveTypeService,
   LeaveRequestService,
-  TrainingService,
   JobOpeningService,
   CandidateService,
   PerformanceReviewService,
+  AutomaticSanctionService,
+  GuardianQuestionService,
+  DailyJournalService,
+  EmployeeInitiationService,
   // Services existants
   RegulationService,
   EvaluationService,
   HrTicketService,
   AttendanceService,
+  // Rituels
+  CompanyRitualService,
+  // Géofencing
+  GeofenceService,
+  // Documents RH
+  HrDocumentService,
+  // Salaires
+  SalaryService,
+  // Événements internes
+  InternalEventService,
+  // Planification salaires
+  SalaryScheduleService,
+  // Bonus
+  BonusService,
+  // Documents obligatoires
+  RequiredDocumentsService,
+  DocumentReminderService,
+  // Rappels pointage
+  AttendanceReminderService,
+  // Heures supplémentaires
+  OvertimeService,
 } from './services';
+import { EmployeeProfileController } from './employee-profile.controller';
+import { EmployeeProfileService } from './employee-profile.service';
+import { HrRealtimeService } from './hr-realtime.service';
+import { MigrationController } from './migration.controller';
 import { RbacModule } from '../rbac/rbac.module';
+import { AuthModule } from '../auth/auth.module';
+import { NotificationModule } from '../notifications/notification.module';
+import { UsersModule } from '../users/users.module';
+import { LoginHistory } from '../users/login-history.entity';
+import { UserRole } from '../rbac/user-role.entity';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
+    AuthModule,
+    NotificationModule,
+    UsersModule,
     TypeOrmModule.forFeature([
       Employee,
+      EmployeeProfile,
+      Department, // Core departments for employee.department relation
+      User, // For employee.user relation
+      Organization, // For employee.organization relation
+      LoginHistory, // For FirebaseAuthGuard
+      UserRole, // For role checking in HrDocumentController
       // Organisation RH
       HrDepartment,
       JobPosition,
@@ -93,6 +173,7 @@ import { RbacModule } from '../rbac/rbac.module';
       LeaveType,
       LeaveBalance,
       LeaveRequest,
+      LeaveDeductionHistory,
       // Présence
       Attendance,
       OfficeAttendance,
@@ -101,9 +182,6 @@ import { RbacModule } from '../rbac/rbac.module';
       EmployeeSkill,
       // Performance
       PerformanceReview,
-      // Formation
-      Training,
-      TrainingEnrollment,
       // Recrutement
       JobOpening,
       Candidate,
@@ -125,10 +203,33 @@ import { RbacModule } from '../rbac/rbac.module';
       EmployeeBonus,
       // Sanctions
       EmployeeSanction,
+      // Questions Gardien
+      GuardianQuestion,
+      // Journal de bord
+      DailyJournal,
+      // Initiation nouveaux membres
+      EmployeeInitiation,
       // SAV RH
       HrTicket,
       HrTicketComment,
       HrTicketCategory,
+      // Rituels d'entreprise
+      CompanyRitual,
+      RitualOccurrence,
+      RitualParticipant,
+      // Géofencing
+      GeofenceZone,
+      // Documents RH
+      HrDocument,
+      HrDocumentAssignment,
+      HrDocumentTypeConfig,
+      // Événements internes
+      InternalEvent,
+      // Planification salaires
+      SalarySchedule,
+      SalaryPayment,
+      // Documents obligatoires
+      EmployeeRequiredDocument,
     ]),
     RbacModule,
   ],
@@ -139,15 +240,39 @@ import { RbacModule } from '../rbac/rbac.module';
     JobPositionController,
     LeaveTypeController,
     LeaveRequestController,
-    TrainingController,
     JobOpeningController,
     CandidateController,
     PerformanceReviewController,
+    SanctionController,
+    GuardianQuestionController,
+    DailyJournalController,
+    EmployeeInitiationController,
     // Controllers existants
     RegulationController,
     EvaluationController,
     HrTicketController,
     AttendanceController,
+    // Rituels
+    CompanyRitualController,
+    // Géofencing
+    GeofenceController,
+    // Documents RH
+    HrDocumentController,
+    HrDocumentTypeController,
+    // Salaires
+    SalaryController,
+    // Événements internes
+    InternalEventController,
+    // Planification salaires
+    SalaryScheduleController,
+    // Bonus
+    BonusController,
+    // Documents obligatoires
+    RequiredDocumentsController,
+    // Profil employé
+    EmployeeProfileController,
+    // Migrations
+    MigrationController,
   ],
   providers: [
     HrService,
@@ -156,15 +281,43 @@ import { RbacModule } from '../rbac/rbac.module';
     JobPositionService,
     LeaveTypeService,
     LeaveRequestService,
-    TrainingService,
     JobOpeningService,
     CandidateService,
     PerformanceReviewService,
+    AutomaticSanctionService,
+    GuardianQuestionService,
+    DailyJournalService,
+    EmployeeInitiationService,
     // Services existants
     RegulationService,
     EvaluationService,
     HrTicketService,
     AttendanceService,
+    // Rituels
+    CompanyRitualService,
+    // Géofencing
+    GeofenceService,
+    // Documents RH
+    HrDocumentService,
+    // Salaires
+    SalaryService,
+    // Événements internes
+    InternalEventService,
+    // Planification salaires
+    SalaryScheduleService,
+    // Bonus
+    BonusService,
+    // Documents obligatoires
+    RequiredDocumentsService,
+    DocumentReminderService,
+    // Rappels pointage (cron)
+    AttendanceReminderService,
+    // Heures supplémentaires
+    OvertimeService,
+    // Profil employé
+    EmployeeProfileService,
+    // Realtime HR (Socket.IO emits)
+    HrRealtimeService,
   ],
   exports: [
     HrService,
@@ -173,15 +326,36 @@ import { RbacModule } from '../rbac/rbac.module';
     JobPositionService,
     LeaveTypeService,
     LeaveRequestService,
-    TrainingService,
     JobOpeningService,
     CandidateService,
     PerformanceReviewService,
+    AutomaticSanctionService,
+    GuardianQuestionService,
+    DailyJournalService,
+    EmployeeInitiationService,
     // Services existants
     RegulationService,
     EvaluationService,
     HrTicketService,
     AttendanceService,
+    // Rituels
+    CompanyRitualService,
+    // Géofencing
+    GeofenceService,
+    // Documents RH
+    HrDocumentService,
+    // Salaires
+    SalaryService,
+    // Événements internes
+    InternalEventService,
+    // Planification salaires
+    SalaryScheduleService,
+    // Bonus
+    BonusService,
+    // Profil employé
+    EmployeeProfileService,
+    // Realtime HR
+    HrRealtimeService,
   ],
 })
 export class HrModule { }

@@ -10,6 +10,7 @@ import {
 import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type ReviewType = 'regular' | 'probation' | 'promotion' | 'annual';
 export type ReviewStatus =
   | 'draft'
@@ -63,7 +64,8 @@ export class PerformanceReview {
   @JoinColumn({ name: 'hr_reviewer_id' })
   hrReviewer?: User | null;
 
-  @Column({ type: 'decimal', precision: 3, scale: 2, name: 'overall_rating', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 3, scale: 2, name: 'overall_rating', nullable: true })
   overallRating!: number | null;
 
   @Column({ type: 'varchar', length: 50, name: 'rating_scale', default: '1-5' })
@@ -83,6 +85,7 @@ export class PerformanceReview {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'salary_increase_percentage',

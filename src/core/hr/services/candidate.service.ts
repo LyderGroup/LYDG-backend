@@ -59,7 +59,9 @@ export class CandidateService {
       qb.andWhere('(LOWER(c.first_name) LIKE :term OR LOWER(c.last_name) LIKE :term OR LOWER(c.email) LIKE :term)', { term });
     }
 
-    qb.orderBy('c.created_at', 'DESC')
+    // orderBy DOIT utiliser le nom de propriété camelCase (mappé par
+    // l'entité), pas le nom de colonne SQL.
+    qb.orderBy('c.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 

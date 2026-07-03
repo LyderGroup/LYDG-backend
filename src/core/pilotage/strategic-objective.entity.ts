@@ -10,6 +10,7 @@ import {
 import { Organization } from '../organizations/organizations.entity';
 import { User } from '../users/user.entity';
 
+import { numericTransformer } from '../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_a_pilotage', name: 'strategic_objectives' })
 export class StrategicObjective {
   @PrimaryGeneratedColumn('uuid')
@@ -53,10 +54,12 @@ export class StrategicObjective {
   @Column({ type: 'date', name: 'end_date' })
   endDate!: string;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'target_value', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'target_value', nullable: true })
   targetValue!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'current_value', default: 0 })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'current_value', default: 0 })
   currentValue!: string;
 
   @Column({ type: 'varchar', length: 50, nullable: true })

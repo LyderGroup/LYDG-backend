@@ -14,6 +14,7 @@ import { ConfigService } from '@nestjs/config';
 import { Organization } from '../organizations/organizations.entity';
 import { User } from '../users/user.entity';
 import { ProjectComment } from './project-comment.entity';
+import { corsOriginCallback } from '../security/cors.config';
 
 type AuthedSocket = Socket & {
   data: {
@@ -24,7 +25,10 @@ type AuthedSocket = Socket & {
 
 @WebSocketGateway({
   namespace: '/rt',
-  cors: { origin: true, credentials: true },
+  cors: {
+    origin: corsOriginCallback,
+    credentials: true,
+  },
 })
 export class ProjectCommentsGateway {
   @WebSocketServer()
@@ -100,7 +104,7 @@ export class ProjectCommentsGateway {
     client.data.userId = String(user.id);
     client.data.organizationId = String(organization.id);
   }
- 
+
 
   @SubscribeMessage('project.join')
   async joinProjectRoom(
@@ -123,15 +127,14 @@ export class ProjectCommentsGateway {
         SELECT 1 AS is_admin
         FROM core.user_roles ur
         INNER JOIN core.roles r ON r.id = ur.role_id
+        INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+        INNER JOIN core.permissions p ON p.id = rp.permission_id
         WHERE ur.user_id = $2
           AND ur.is_active = true
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
           AND r.is_active = true
-          AND (
-            r.is_system_role = true
-            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
-            OR (r.organization_id = $3 AND r.code IN ('COUNTRY_MANAGER', 'DEPARTMENT_MANAGER', 'PROJECT_MANAGER'))
-          )
+          AND p.code IN ('project.read.all', 'project.members.read.all', 'system.admin')
+          AND r.organization_id = $3
         LIMIT 1
       )
       SELECT 

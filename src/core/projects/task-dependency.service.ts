@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -41,6 +42,8 @@ export interface CriticalPathResult {
 
 @Injectable()
 export class TaskDependencyService {
+  private readonly logger = new Logger(TaskDependencyService.name);
+
   constructor(
     @InjectRepository(TaskDependency)
     private readonly depRepo: Repository<TaskDependency>,
@@ -48,8 +51,8 @@ export class TaskDependencyService {
     private readonly taskRepo: Repository<Task>,
     @InjectRepository(Subtask)
     private readonly subtaskRepo: Repository<Subtask>,
-  ) {}
- 
+  ) { }
+
   async addDependency(dto: AddDependencyDto): Promise<TaskDependency> {
     // 1. Vérifier que les deux tâches existent et appartiennent à la même org
     const [task, dependsOn] = await Promise.all([
@@ -165,19 +168,6 @@ export class TaskDependencyService {
       }
     }
 
-    // Vérifier que toutes les sous-tâches sont terminées
-    const incompleteSubtasks = await this.subtaskRepo.find({
-      where: { taskId, isCompleted: false },
-      select: ['title'],
-    });
-
-    if (incompleteSubtasks.length > 0) {
-      const subtaskNames = incompleteSubtasks.map(st => `"${st.title}"`).join(', ');
-      unsatisfied.push(
-        `Les sous-tâches suivantes doivent être terminées : ${subtaskNames}`,
-      );
-    }
-
     if (unsatisfied.length > 0) {
       throw new BadRequestException({
         message: 'Des dépendances ne sont pas satisfaites',
@@ -185,11 +175,32 @@ export class TaskDependencyService {
       });
     }
   }
- 
+
+  /**
+   * Vérifie que toutes les sous-tâches d'une tâche sont terminées.
+   * Cette vérification est séparée des dépendances inter-tâches.
+   */
+  async assertSubtasksCompleted(
+    taskId: string,
+  ): Promise<void> {
+    const incompleteSubtasks = await this.subtaskRepo.find({
+      where: { taskId, isCompleted: false },
+      select: ['title'],
+    });
+
+    if (incompleteSubtasks.length > 0) {
+      const subtaskNames = incompleteSubtasks.map(st => `"${st.title}"`).join(', ');
+      throw new BadRequestException({
+        message: 'Des sous-tâches ne sont pas terminées',
+        blockedBy: [`Les sous-tâches suivantes doivent être terminées : ${subtaskNames}`],
+      });
+    }
+  }
+
   async removeDependency(
     dependencyId: string,
     organizationId: string,
-  ): Promise<void> { 
+  ): Promise<void> {
     const dep = await this.depRepo
       .createQueryBuilder('dep')
       .innerJoin('dep.task', 'task')
@@ -239,9 +250,10 @@ export class TaskDependencyService {
     projectId: string,
     organizationId: string,
   ): Promise<CriticalPathResult[]> {
-    // Charger toutes les tâches du projet avec leurs dépendances
+    // Charger toutes les tâches du projet avec leurs dépendances (limité à 500 pour éviter saturation mémoire)
     const tasks = await this.taskRepo.find({
       where: { projectId, organizationId },
+      take: 500,
     });
 
     const dependencies = await this.depRepo
@@ -249,6 +261,7 @@ export class TaskDependencyService {
       .innerJoin('dep.task', 'task')
       .where('task.projectId = :projectId', { projectId })
       .andWhere('task.organizationId = :orgId', { orgId: organizationId })
+      .take(500)
       .getMany();
 
     return this.computeCriticalPath(tasks, dependencies);
@@ -260,7 +273,7 @@ export class TaskDependencyService {
    * Détection de cycle via DFS (Depth-First Search).
    * Complexité : O(V + E) où V = tâches du projet, E = dépendances
    */
-  private async assertNoCycleWouldBeCreated(
+  async assertNoCycleWouldBeCreated(
     newTaskId: string,
     newDependsOnId: string,
     organizationId: string,
@@ -452,6 +465,7 @@ export class TaskDependencyService {
       return Math.max(1, diffDays);
     }
     // Durée par défaut de 1 jour si pas de dates
+    this.logger.warn(`Task "${task.title}" (${task.id}) has no start/due dates, using default duration of 1 day`);
     return 1;
   }
 }

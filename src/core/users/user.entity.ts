@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -9,6 +10,21 @@ import {
 } from 'typeorm';
 import { Organization } from '../organizations/organizations.entity';
 
+/**
+ * Index uniques métiers :
+ * - (organization_id, email) : empêche deux utilisateurs avec le même email
+ *   dans la même organisation. La condition WHERE deleted_at IS NULL permet
+ *   de réutiliser l'email d'un compte supprimé.
+ * - external_id : un même UID Firebase ne peut être lié qu'à un seul user.
+ */
+@Index('users_org_email_uniq', ['organizationId', 'email'], {
+  unique: true,
+  where: '"deleted_at" IS NULL',
+})
+@Index('users_external_id_uniq', ['externalId'], {
+  unique: true,
+  where: '"external_id" IS NOT NULL',
+})
 @Entity({ schema: 'core', name: 'users' })
 export class User {
   @PrimaryGeneratedColumn('uuid')

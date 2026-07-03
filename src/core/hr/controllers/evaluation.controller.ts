@@ -11,24 +11,25 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { EvaluationService } from '../services/evaluation.service';
-import { RolesGuard } from '../../rbac/roles.guard';
-import { Roles } from '../../rbac/roles.decorator';
+import { PermissionGuard } from '../../rbac/permission.guard';
+import { RequirePermission } from '../../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr.permissions';
 
 @Controller('core/hr/evaluations')
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 export class EvaluationController {
-  constructor(private readonly evaluationService: EvaluationService) {}
- 
+  constructor(private readonly evaluationService: EvaluationService) { }
+
 
   @Get('kpis')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_READ_ALL, { moduleCode: 'module_c_rh' })
   async listKpis(@Req() req: any) {
     const organizationId = req.user.organizationId;
     return this.evaluationService.listKpis(organizationId);
   }
 
   @Post('kpis')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_WRITE, { moduleCode: 'module_c_rh' })
   async createKpi(
     @Req() req: any,
     @Body() body: {
@@ -48,13 +49,13 @@ export class EvaluationController {
   }
 
   @Get('kpis/weights/:positionId')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_READ_ALL, { moduleCode: 'module_c_rh' })
   async getKpiWeights(@Param('positionId') positionId: string) {
     return this.evaluationService.getKpiWeights(positionId);
   }
 
   @Post('kpis/weights/:positionId')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_WRITE, { moduleCode: 'module_c_rh' })
   async setKpiWeights(
     @Req() req: any,
     @Param('positionId') positionId: string,
@@ -63,10 +64,10 @@ export class EvaluationController {
     const organizationId = req.user.organizationId;
     return this.evaluationService.setKpiWeights(organizationId, positionId, body.weights);
   }
- 
+
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_WRITE, { moduleCode: 'module_c_rh' })
   async createEvaluation(
     @Req() req: any,
     @Body() body: {
@@ -92,13 +93,13 @@ export class EvaluationController {
   }
 
   @Post(':id/submit')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_WRITE, { moduleCode: 'module_c_rh' })
   async submitEvaluation(@Param('id') evaluationId: string) {
     return this.evaluationService.submitEvaluation(evaluationId);
   }
 
   @Post(':id/validate')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_VALIDATE, { moduleCode: 'module_c_rh' })
   async validateEvaluation(
     @Req() req: any,
     @Param('id') evaluationId: string,
@@ -108,6 +109,7 @@ export class EvaluationController {
   }
 
   @Post(':id/contest')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_READ_OWN, { moduleCode: 'module_c_rh' })
   async contestEvaluation(
     @Param('id') evaluationId: string,
     @Body() body: { notes: string },
@@ -116,12 +118,14 @@ export class EvaluationController {
   }
 
   @Get(':id')
+  @RequirePermission([HR_PERMISSIONS.HR_EVALUATION_READ_ALL, HR_PERMISSIONS.HR_EVALUATION_READ_OWN], { moduleCode: 'module_c_rh' })
   async getEvaluationDetails(@Param('id') evaluationId: string) {
     return this.evaluationService.getEvaluationDetails(evaluationId);
   }
- 
+
 
   @Get('my/history')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_READ_OWN, { moduleCode: 'module_c_rh' })
   async getMyEvaluations(
     @Req() req: any,
     @Query('year') year?: string,
@@ -137,10 +141,10 @@ export class EvaluationController {
       year ? parseInt(year) : undefined,
     );
   }
- 
+
 
   @Get('team')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_READ_ALL, { moduleCode: 'module_c_rh' })
   async getTeamEvaluations(
     @Req() req: any,
     @Query('departmentId') departmentId?: string,
@@ -158,7 +162,7 @@ export class EvaluationController {
   }
 
   @Get('stats')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_READ_ALL, { moduleCode: 'module_c_rh' })
   async getEvaluationStats(
     @Req() req: any,
     @Query('month') month: string,

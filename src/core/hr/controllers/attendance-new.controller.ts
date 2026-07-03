@@ -10,29 +10,31 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsString } from 'class-validator';
 import { AttendanceService } from '../services/attendance-new.service';
-import { RolesGuard } from '../../rbac/roles.guard';
-import { Roles } from '../../rbac/roles.decorator';
+import { PermissionGuard } from '../../rbac/permission.guard';
+import { RequirePermission } from '../../rbac/require-permission.decorator';
+import { HR_PERMISSIONS } from '../hr.permissions';
 
 class CheckInDto {
-  employeeId!: string;
+  @IsString() employeeId!: string;
 }
 
 class CheckOutDto {
-  employeeId!: string;
+  @IsString() employeeId!: string;
 }
 
 class JustifyDto {
-  notes!: string;
+  @IsString() notes!: string;
 }
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/hr/attendance')
 export class AttendanceController {
-  constructor(private readonly service: AttendanceService) {}
+  constructor(private readonly service: AttendanceService) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_READ_ALL, { moduleCode: 'module_c_rh' })
   async list(@Req() req: any, @Query() query: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const page = query.page ? parseInt(query.page as string, 10) : undefined;
@@ -48,7 +50,7 @@ export class AttendanceController {
   }
 
   @Get('stats')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_READ_ALL, { moduleCode: 'module_c_rh' })
   async stats(@Req() req: any, @Query() query: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const startDate = query.startDate ? new Date(query.startDate) : new Date(new Date().setDate(1));
@@ -58,7 +60,7 @@ export class AttendanceController {
   }
 
   @Get(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT')
+  @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_READ_ALL, { moduleCode: 'module_c_rh' })
   async findOne(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const item = await this.service.findOne(tenant?.id as string, id);
@@ -67,19 +69,19 @@ export class AttendanceController {
   }
 
   @Post('check-in')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT', 'EMPLOYEE')
+  @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_WRITE, { moduleCode: 'module_c_rh' })
   async checkIn(@Body() dto: CheckInDto) {
     return this.service.checkIn(dto.employeeId);
   }
 
   @Post('check-out')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER', 'HR_ASSISTANT', 'EMPLOYEE')
+  @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_WRITE, { moduleCode: 'module_c_rh' })
   async checkOut(@Body() dto: CheckOutDto) {
     return this.service.checkOut(dto.employeeId);
   }
 
   @Post(':id/justify')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_JUSTIFY, { moduleCode: 'module_c_rh' })
   async justify(
     @Req() req: any,
     @Param('id') id: string,
@@ -94,7 +96,7 @@ export class AttendanceController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_MANAGE, { moduleCode: 'module_c_rh' })
   async delete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.service.delete(tenant?.id as string, id);

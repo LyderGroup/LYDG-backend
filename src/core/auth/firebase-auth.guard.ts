@@ -1,8 +1,11 @@
 import {
   CanActivate,
   ExecutionContext,
+  Inject,
   Injectable,
+  Logger,
   UnauthorizedException,
+  forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,10 +13,28 @@ import { Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
 import { User } from '../users/user.entity';
 import { LoginHistory } from '../users/login-history.entity';
+import { Employee } from '../hr/employee.entity';
+import { UserDeviceService } from './user-device.service';
+
+interface CachedUserContext {
+  expiresAt: number;
+  userId: string;
+  organizationId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  employeeId: string | null;
+}
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
+  private readonly logger = new Logger(FirebaseAuthGuard.name);
   private firebaseInitialized = false;
+
+  // Cache mémoire: firebase uid -> contexte utilisateur résolu (TTL 5 min).
+  // Évite 3 SELECT à chaque requête API. À remplacer par Redis pour scale-out.
+  private readonly userCache = new Map<string, CachedUserContext>();
+  private readonly userCacheTtlMs = 5 * 60 * 1000;
 
   constructor(
     private readonly configService: ConfigService,
@@ -21,7 +42,13 @@ export class FirebaseAuthGuard implements CanActivate {
     private readonly usersRepo: Repository<User>,
     @InjectRepository(LoginHistory)
     private readonly loginHistoryRepo: Repository<LoginHistory>,
-  ) {}
+    @InjectRepository(Employee)
+    private readonly employeeRepo: Repository<Employee>,
+    // forwardRef car UserDeviceService est dans le même module que ce guard
+    // et l'enregistrement croisé crée une dépendance circulaire au runtime.
+    @Inject(forwardRef(() => UserDeviceService))
+    private readonly userDeviceService: UserDeviceService,
+  ) { }
 
   private ensureFirebaseApp(): void {
     if (this.firebaseInitialized && admin.apps.length > 0) {
@@ -88,8 +115,15 @@ export class FirebaseAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<any>();
     const path: string = request.path || request.url || '';
 
-    // Laisser passer l'healthcheck sans auth
-    if (path === '/health/db') {
+    // Routes publiques (sans authentification requise)
+    // - / : root
+    // - /health/db : health check pour load balancers
+    // - /public/* : API publique (careers, etc.)
+    if (
+      path === '/' ||
+      path === '/health/db' ||
+      path.startsWith('/public/')
+    ) {
       return true;
     }
 
@@ -115,13 +149,25 @@ export class FirebaseAuthGuard implements CanActivate {
 
     const externalId = decodedToken.uid;
     const email = decodedToken.email ?? null;
-    const ipAddress = request.ip || request.headers['x-forwarded-for'] || request.connection?.remoteAddress || null;
-    const userAgent = request.headers['user-agent'] || null;
 
-    let user: User | null = null;
+    // 1) Cache hit : on n'interroge la DB que toutes les userCacheTtlMs.
+    const cached = this.userCache.get(externalId);
+    if (cached && cached.expiresAt > Date.now()) {
+      request.user = {
+        id: cached.userId,
+        email: cached.email,
+        organizationId: cached.organizationId,
+        firebaseUid: externalId,
+        employeeId: cached.employeeId,
+        firstName: cached.firstName,
+        lastName: cached.lastName,
+      };
+      return true;
+    }
+
+    // 2) Résolution du compte (par externalId, fallback email)
+    let user: User | null = await this.usersRepo.findOne({ where: { externalId } });
     let foundByEmail = false;
-
-    user = await this.usersRepo.findOne({ where: { externalId } });
 
     if (!user && email) {
       user = await this.usersRepo.findOne({ where: { email } });
@@ -141,20 +187,35 @@ export class FirebaseAuthGuard implements CanActivate {
 
     if (!user) {
       throw new UnauthorizedException(
-        'Aucun compte trouvé pour cet utilisateur dans le core.users. Veuillez contacter votre administrateur.',
+        'Aucun compte trouvé pour cet utilisateur. Veuillez contacter votre administrateur.',
       );
     }
 
-    // Mettre à jour les informations de connexion
+    // 3) Update login_count atomiquement (UPDATE … = login_count + 1)
+    //    et historique : sur premier hit du cache (donc ~ par session).
+    const ipAddress =
+      request.ip ||
+      request.headers['x-forwarded-for'] ||
+      request.connection?.remoteAddress ||
+      null;
+    const userAgent = request.headers['user-agent'] || null;
     const { browser, os, deviceType } = this.parseUserAgent(userAgent);
-    
-    await this.usersRepo.update(user.id, {
-      lastLoginAt: new Date(),
-      lastLoginIp: ipAddress,
-      loginCount: (user.loginCount || 0) + 1,
-    });
 
-    // Enregistrer dans l'historique de connexion
+    try {
+      await this.usersRepo
+        .createQueryBuilder()
+        .update(User)
+        .set({
+          lastLoginAt: () => 'NOW()',
+          lastLoginIp: ipAddress,
+          loginCount: () => '"login_count" + 1',
+        })
+        .where('id = :id', { id: user.id })
+        .execute();
+    } catch (err) {
+      this.logger.warn(`Échec mise à jour login_count: ${(err as Error).message}`);
+    }
+
     try {
       const loginRecord = this.loginHistoryRepo.create({
         userId: user.id,
@@ -167,17 +228,64 @@ export class FirebaseAuthGuard implements CanActivate {
       });
       await this.loginHistoryRepo.save(loginRecord);
     } catch (err) {
-      console.error('[LOGIN_HISTORY] Failed to save login history:', err);
+      this.logger.warn(`Échec enregistrement login history: ${(err as Error).message}`);
     }
+
+    // 4) Récupération employee.id (n'a besoin que d'une colonne)
+    const employee = await this.employeeRepo
+      .createQueryBuilder('employee')
+      .select(['employee.id'])
+      .where('employee.userId = :userId', { userId: user.id })
+      .getOne();
+
+    // 5) Mise en cache (TTL 5 min)
+    this.userCache.set(externalId, {
+      expiresAt: Date.now() + this.userCacheTtlMs,
+      userId: user.id,
+      organizationId: user.organizationId,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      employeeId: employee?.id ?? null,
+    });
 
     request.user = {
       id: user.id,
       email: user.email,
       organizationId: user.organizationId,
       firebaseUid: externalId,
-      raw: user,
+      employeeId: employee?.id ?? null,
+      firstName: user.firstName,
+      lastName: user.lastName,
     };
 
+    // 6) Check device (best-effort) — déclenche l'INSERT/UPDATE et notifie
+    // les RH si nouveau device ou device partagé. N'échoue jamais l'auth.
+    // Tourne uniquement en branche cache miss : pas de coût supplémentaire
+    // sur les requêtes API normales (le cache TTL de 5 min absorbe la charge).
+    const fingerprint =
+      (request.headers['x-device-fingerprint'] as string | undefined) ??
+      (request.headers['X-Device-Fingerprint'] as string | undefined) ??
+      '';
+    if (fingerprint) {
+      void this.userDeviceService
+        .checkDevice({
+          userId: user.id,
+          organizationId: user.organizationId,
+          deviceFingerprint: fingerprint,
+          userAgent: typeof userAgent === 'string' ? userAgent : null,
+          ipAddress: typeof ipAddress === 'string' ? ipAddress : null,
+        })
+        .catch(err => this.logger.warn(`checkDevice a échoué: ${(err as Error).message}`));
+    }
+
     return true;
+  }
+
+  /**
+   * Invalide le cache utilisateur (à appeler en cas de changement de profil).
+   */
+  invalidateUserCache(externalId: string): void {
+    this.userCache.delete(externalId);
   }
 }

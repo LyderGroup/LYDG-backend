@@ -19,10 +19,9 @@ export class TenantMiddleware implements NestMiddleware {
   constructor(
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
-  ) {}
+  ) { }
 
   async use(req: TenantRequest, res: Response, next: NextFunction): Promise<void> {
-    // On laisse passer tout ce qui n'est pas /core/* (sécurisé au niveau AppModule)
     const orgCodeHeader =
       (req.headers['x-organization-code'] as string | undefined) ??
       (req.headers['X-Organization-Code'] as string | undefined) ??
@@ -32,11 +31,12 @@ export class TenantMiddleware implements NestMiddleware {
       throw new BadRequestException('Missing x-organization-code header');
     }
 
-    const trimmedCode = orgCodeHeader.trim();
+    const trimmedCode = orgCodeHeader.trim().toUpperCase();
 
-    const organization = await this.organizationsRepo.findOne({
-      where: { nameCode: trimmedCode },
-    });
+    const organization = await this.organizationsRepo
+      .createQueryBuilder('org')
+      .where('UPPER(org.nameCode) = :code', { code: trimmedCode })
+      .getOne();
 
     if (!organization) {
       throw new NotFoundException(

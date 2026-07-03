@@ -13,10 +13,26 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { RolesGuard } from '../rbac/roles.guard';
+import { PermissionGuard } from '../rbac/permission.guard';
 import { InAppNotificationService } from '../notifications/in-app-notification.service';
 
-@UseGuards(RolesGuard)
+// Constantes legacy importées depuis project.permissions.ts (source unique
+// de vérité). Cette section retire l'ancien objet local hardcodé.
+import { LEGACY_PROJECT_PERMISSIONS, SYSTEM_ADMIN_PERMISSION } from './project.permissions';
+
+/** Codes legacy utilisés dans les requêtes SQL `IN (...)` ci-dessous. */
+const READ_ALL_GROUP = [
+  LEGACY_PROJECT_PERMISSIONS.PROJECT_READ_ALL,
+  LEGACY_PROJECT_PERMISSIONS.PROJECT_MEMBERS_READ_ALL,
+  SYSTEM_ADMIN_PERMISSION,
+];
+const MANAGE_GROUP = [
+  LEGACY_PROJECT_PERMISSIONS.PROJECT_EDIT,
+  LEGACY_PROJECT_PERMISSIONS.PROJECT_TASK_MANAGE,
+  SYSTEM_ADMIN_PERMISSION,
+];
+
+@UseGuards(PermissionGuard)
 @Controller('core/projects/lookups')
 export class ProjectsLookupsController {
   constructor(
@@ -35,17 +51,68 @@ export class ProjectsLookupsController {
     return Array.from(new Set(list.map((x) => String(x))));
   }
 
+  /**
+   * Vérifie si l'utilisateur a des permissions d'admin (peut voir tous les projets)
+   * Remplace les vérifications de rôles hardcodés
+   */
+  private async userHasProjectAdminPermissions(userId: string, organizationId: string): Promise<boolean> {
+    const result = await this.dataSource.query(
+      `
+      SELECT 1 AS ok
+      FROM core.user_roles ur
+      INNER JOIN core.roles r ON r.id = ur.role_id
+      INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+      INNER JOIN core.permissions p ON p.id = rp.permission_id
+      WHERE ur.user_id = $1
+        AND ur.is_active = true
+        AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+        AND r.is_active = true
+        AND p.code = ANY($3::text[])
+        AND r.organization_id = $2
+      LIMIT 1
+      `,
+      [userId, organizationId, READ_ALL_GROUP],
+    );
+    return result.length > 0;
+  }
+
+  /**
+   * Vérifie si l'utilisateur a des permissions de gestion de projet
+   */
+  private async userHasProjectManagePermissions(userId: string, organizationId: string): Promise<boolean> {
+    const result = await this.dataSource.query(
+      `
+      SELECT 1 AS ok
+      FROM core.user_roles ur
+      INNER JOIN core.roles r ON r.id = ur.role_id
+      INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+      INNER JOIN core.permissions p ON p.id = rp.permission_id
+      WHERE ur.user_id = $1
+        AND ur.is_active = true
+        AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+        AND r.is_active = true
+        AND p.code = ANY($3::text[])
+        AND r.organization_id = $2
+      LIMIT 1
+      `,
+      [userId, organizationId, MANAGE_GROUP],
+    );
+    return result.length > 0;
+  }
+
   private async resolveAccessibleOrganizationIdsForUser(userId: string): Promise<string[]> {
     const system = (await this.dataSource.query(
       `
       SELECT 1 AS ok
       FROM core.user_roles ur
       INNER JOIN core.roles r ON r.id = ur.role_id
+      INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+      INNER JOIN core.permissions p ON p.id = rp.permission_id
       WHERE ur.user_id = $1
         AND ur.is_active = true
         AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
         AND r.is_active = true
-        AND r.is_system_role = true
+        AND p.code = 'system.admin'
       LIMIT 1
       `,
       [userId],
@@ -129,7 +196,7 @@ export class ProjectsLookupsController {
         AND (pm.user_id IS NOT NULL OR p.created_by = $2 OR p.manager_id = $2)
       LIMIT 1
       `,
-      [projectId.trim(), String(currentUser.id), String(tenant.id)],
+      [projectId.trim(), String(currentUser.id), String(tenant.id), READ_ALL_GROUP],
     )) as Array<{ ok?: number }>;
 
     if (!access?.[0]?.ok) {
@@ -476,26 +543,7 @@ export class ProjectsLookupsController {
       throw new UnauthorizedException('Missing authenticated user');
     }
 
-    const isOrgAdminRows = (await this.dataSource.query(
-      `
-      SELECT 1 AS ok
-      FROM core.user_roles ur
-      INNER JOIN core.roles r ON r.id = ur.role_id
-      WHERE ur.user_id = $1
-        AND ur.is_active = true
-        AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
-        AND r.is_active = true
-        AND (
-          r.is_system_role = true
-          OR r.code IN ('SUPER_ADMIN','COUNTRY_MANAGER')
-          OR (r.organization_id = $2 AND r.code IN ('COUNTRY_MANAGER','DEPARTMENT_MANAGER','PROJECT_MANAGER'))
-        )
-      LIMIT 1
-      `,
-      [String(currentUser.id), String(tenant.id)],
-    )) as Array<{ ok?: number }>;
-
-    const isOrgAdmin = !!isOrgAdminRows?.[0]?.ok;
+    const isOrgAdmin = await this.userHasProjectAdminPermissions(String(currentUser.id), String(tenant.id));
 
     const rows = (await this.dataSource.query(
       `
@@ -758,14 +806,33 @@ export class ProjectsLookupsController {
     const { name: projectName, organization_id: orgId } = result[0];
 
     if (status === 'active') {
-      await this.dataSource.query(
-        `
-        UPDATE module_b_projects.projects
-        SET start_date = CURRENT_DATE
-        WHERE id = $1 AND start_date IS NULL
-        `,
-        [projectId.trim()],
-      );
+      // Auto-set start_date à CURRENT_DATE si NULL, MAIS on respecte la
+      // contrainte CHECK (start_date <= planned_end_date) : si la date
+      // de fin prévue est dans le passé, on prend la date la plus petite
+      // entre aujourd'hui et planned_end_date. Si pas de planned_end_date,
+      // on met juste CURRENT_DATE. Cette query ne plante plus si l'utilisateur
+      // a saisi un planned_end_date dans le passé.
+      try {
+        await this.dataSource.query(
+          `
+          UPDATE module_b_projects.projects
+          SET start_date = CASE
+            WHEN planned_end_date IS NOT NULL AND planned_end_date < CURRENT_DATE
+              THEN planned_end_date
+            ELSE CURRENT_DATE
+          END
+          WHERE id = $1 AND start_date IS NULL
+          `,
+          [projectId.trim()],
+        );
+      } catch (err) {
+        // Best-effort : si la contrainte CHECK est plus stricte qu'on ne le
+        // pense, on log et on continue. Le statut est déjà à "active",
+        // l'utilisateur pourra ajuster la date manuellement.
+        console.warn(
+          `[projects-lookups] Auto-set start_date failed for project ${projectId.trim()}: ${(err as Error).message}`,
+        );
+      }
     }
 
     const members = (await this.dataSource.query(
@@ -789,16 +856,15 @@ export class ProjectsLookupsController {
         SELECT DISTINCT ur.user_id
         FROM core.user_roles ur
         INNER JOIN core.roles r ON r.id = ur.role_id
+        INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+        INNER JOIN core.permissions p ON p.id = rp.permission_id
         WHERE ur.is_active = true
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
           AND r.is_active = true
-          AND (
-            r.is_system_role = true
-            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
-            OR (r.organization_id = $1 AND r.code IN ('COUNTRY_MANAGER', 'DEPARTMENT_MANAGER', 'PROJECT_MANAGER'))
-          )
+          AND p.code = ANY($2::text[])
+          AND r.organization_id = $1
         `,
-      [orgId],
+      [orgId, READ_ALL_GROUP],
     )) as Array<{ user_id: string }>;
 
     // Combiner les IDs uniques
@@ -859,15 +925,14 @@ export class ProjectsLookupsController {
         SELECT 1 AS is_admin
         FROM core.user_roles ur
         INNER JOIN core.roles r ON r.id = ur.role_id
+        INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+        INNER JOIN core.permissions p ON p.id = rp.permission_id
         WHERE ur.user_id = $2
           AND ur.is_active = true
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
           AND r.is_active = true
-          AND (
-            r.is_system_role = true
-            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
-            OR (r.organization_id = $3 AND r.code IN ('COUNTRY_MANAGER', 'DEPARTMENT_MANAGER', 'PROJECT_MANAGER'))
-          )
+          AND p.code = ANY($4::text[])
+          AND r.organization_id = $3
         LIMIT 1
       )
       SELECT 1 AS ok
@@ -886,7 +951,7 @@ export class ProjectsLookupsController {
         )
       LIMIT 1
       `,
-      [projectId.trim(), String(currentUser.id), String(tenant.id)],
+      [projectId.trim(), String(currentUser.id), String(tenant.id), READ_ALL_GROUP],
     )) as Array<{ ok?: number }>;
 
     if (!access?.[0]?.ok) {
@@ -947,25 +1012,22 @@ export class ProjectsLookupsController {
         SELECT 1 AS is_admin
         FROM core.user_roles ur
         INNER JOIN core.roles r ON r.id = ur.role_id
+        INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+        INNER JOIN core.permissions p ON p.id = rp.permission_id
         WHERE ur.user_id = $2
           AND ur.is_active = true
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
           AND r.is_active = true
-          AND (
-            r.is_system_role = true
-            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
-            OR (r.organization_id = $3 AND r.code IN ('COUNTRY_MANAGER', 'DEPARTMENT_MANAGER', 'PROJECT_MANAGER'))
-          )
+          AND p.code = ANY($4::text[])
+          AND r.organization_id = $3
         LIMIT 1
       )
       SELECT 1 AS ok
       FROM module_b_projects.projects p
       LEFT JOIN module_b_projects.project_members pm
-        ON pm.project_id = p.id
-       AND pm.user_id = $2
+        ON pm.project_id = p.id AND pm.user_id = $2
       LEFT JOIN module_b_projects.project_managers pma
-        ON pma.project_id = p.id
-       AND pma.user_id = $2
+        ON pma.project_id = p.id AND pma.user_id = $2
       WHERE p.id = $1
         AND (
           pm.id IS NOT NULL
@@ -976,7 +1038,7 @@ export class ProjectsLookupsController {
         )
       LIMIT 1
       `,
-      [projectId.trim(), String(currentUser.id), String(tenant.id)],
+      [projectId.trim(), String(currentUser.id), String(tenant.id), READ_ALL_GROUP],
     )) as Array<{ ok?: number }>;
 
     if (!access?.[0]?.ok) {
@@ -1212,15 +1274,14 @@ export class ProjectsLookupsController {
         SELECT 1 AS is_admin
         FROM core.user_roles ur
         INNER JOIN core.roles r ON r.id = ur.role_id
+        INNER JOIN core.role_permissions rp ON rp.role_id = r.id
+        INNER JOIN core.permissions p ON p.id = rp.permission_id
         WHERE ur.user_id = $2
           AND ur.is_active = true
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
           AND r.is_active = true
-          AND (
-            r.is_system_role = true
-            OR r.code IN ('SUPER_ADMIN', 'COUNTRY_MANAGER')
-            OR (r.organization_id = $3 AND r.code IN ('COUNTRY_MANAGER', 'DEPARTMENT_MANAGER', 'PROJECT_MANAGER'))
-          )
+          AND p.code = ANY($4::text[])
+          AND r.organization_id = $3
         LIMIT 1
       )
       SELECT 1 AS ok
@@ -1239,7 +1300,7 @@ export class ProjectsLookupsController {
         )
       LIMIT 1
       `,
-      [projectId.trim(), String(currentUser.id), String(tenant.id)],
+      [projectId.trim(), String(currentUser.id), String(tenant.id), READ_ALL_GROUP],
     )) as Array<{ ok?: number }>;
 
     if (!access?.[0]?.ok) {

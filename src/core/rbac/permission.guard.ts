@@ -9,6 +9,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { CoreModule } from '../modules/module.entity';
 import { OrganizationModule } from '../modules/organization-module.entity';
 import { Permission } from './permission.entity';
@@ -34,6 +35,7 @@ export class PermissionGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly rbacService: RbacService,
+    private readonly eventEmitter: EventEmitter2,
     @InjectRepository(UserRole)
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(Role)
@@ -46,7 +48,7 @@ export class PermissionGuard implements CanActivate {
     private readonly modulesRepo: Repository<CoreModule>,
     @InjectRepository(OrganizationModule)
     private readonly orgModulesRepo: Repository<OrganizationModule>,
-  ) {}
+  ) { }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
@@ -66,44 +68,20 @@ export class PermissionGuard implements CanActivate {
     const request = context.switchToHttp().getRequest() as any;
 
     const user = request.user;
-    const headerUserId = request.headers['x-user-id'] ?? request.headers['X-User-Id'];
-
-    let userId: string | undefined;
-
-    if (user && user.id) {
-      userId = String(user.id);
-    } else if (typeof headerUserId === 'string') {
-      userId = headerUserId;
-    } else if (Array.isArray(headerUserId) && headerUserId.length > 0) {
-      userId = String(headerUserId[0]);
-    }
-
-    if (!userId) {
+    // SÉCURITÉ : la seule source de vérité pour l'identité est request.user,
+    // posée par FirebaseAuthGuard après vérification du token Firebase.
+    // Le fallback sur des en-têtes (x-user-id) a été retiré car il permettait
+    // l'usurpation d'identité si les guards étaient mal ordonnés.
+    if (!user || !user.id) {
       throw new UnauthorizedException('Missing authenticated user');
     }
+    const userId: string = String(user.id);
 
     const tenant = request.tenant as { id?: string } | undefined;
     const organizationId = tenant?.id ? String(tenant.id) : undefined;
 
     if (!organizationId) {
       throw new BadRequestException('Missing tenant context (x-organization-code)');
-    }
-
-    const hasSystemRole = await this.rbacService.userHasAnySystemRole(
-      userId,
-      organizationId,
-    );
-    if (hasSystemRole) {
-      request.permissionCodes = [
-        'projects.task.read.global',
-        'projects.task.write.global',
-        'projects.task.delete.global',
-        'projects.task.validate.global',
-        'projects.task.create.tenant',
-        'projects.task.export.tenant',
-        'projects.project.create.tenant',
-      ];
-      return true;
     }
 
     const moduleCode =
@@ -119,6 +97,10 @@ export class PermissionGuard implements CanActivate {
 
     const basePermissions = await this.getCachedPermissionsForUser(userId, organizationId);
     const permissions = new Set(basePermissions);
+
+    if (permissions.size === 0) {
+      throw new ForbiddenException('User has no permissions assigned');
+    }
 
     await this.maybeAugmentPermissionsFromProjectMembership({
       moduleCode,
@@ -148,7 +130,7 @@ export class PermissionGuard implements CanActivate {
     if (input.moduleCode !== 'module_b_projects') {
       return;
     }
- 
+
     if (input.permissions.has('projects.task.read.project')) {
       return;
     }
@@ -172,7 +154,7 @@ export class PermissionGuard implements CanActivate {
 
       const subtaskId =
         typeof params.subtaskId === 'string' && params.subtaskId.trim() ? params.subtaskId.trim() : undefined;
- 
+
       if (taskId || subtaskId) {
         const rows = (await this.userRolesRepo.manager.query(
           taskId
@@ -299,7 +281,9 @@ export class PermissionGuard implements CanActivate {
   ): Promise<boolean> {
     const mod = await this.modulesRepo.findOne({ where: { code: moduleCode } });
     if (!mod) {
-      throw new BadRequestException(`Unknown module code: ${moduleCode}`);
+      // Si le module n'est pas enregistré, on autorise par défaut
+      // (pour les modules en développement ou non enregistrés)
+      return true;
     }
 
     if (mod.isCoreModule) {
@@ -334,9 +318,7 @@ export class PermissionGuard implements CanActivate {
       .andWhere('ur.is_active = true')
       .andWhere('(ur.expires_at IS NULL OR ur.expires_at > NOW())')
       .andWhere('r.is_active = true')
-      .andWhere('(r.organization_id = :orgId OR r.is_system_role = true)', {
-        orgId: organizationId,
-      })
+      .andWhere('(r.organization_id = :orgId OR r.organization_id IS NULL)', { orgId: organizationId })
       .andWhere('p.code IS NOT NULL');
 
     const rows = await qb.select(['p.code AS code']).getRawMany<{ code: string }>();
@@ -350,5 +332,39 @@ export class PermissionGuard implements CanActivate {
     this.cache.set(cacheKey, { expiresAt: now + this.ttlMs, permissions: set });
 
     return set;
+  }
+
+  /**
+   * Invalide le cache des permissions pour un utilisateur spécifique
+   * À appeler après tout changement de rôle ou de permission
+   */
+  invalidateCache(userId: string, organizationId: string): void {
+    const cacheKey = `${userId}:${organizationId}`;
+    this.cache.delete(cacheKey);
+  }
+
+  /**
+   * Invalide tout le cache des permissions
+   * À utiliser avec parcimonie (ex: après un bulk update)
+   */
+  invalidateAllCache(): void {
+    this.cache.clear();
+  }
+
+  /**
+   * Event handler: invalide le cache pour un utilisateur spécifique
+   */
+  @OnEvent('rbac.permissions.changed')
+  handlePermissionsChanged(payload: { userId: string; organizationId: string }) {
+    this.invalidateCache(payload.userId, payload.organizationId);
+  }
+
+  /**
+   * Event handler: invalide tout le cache (ex: changement de rôle)
+   */
+  @OnEvent('rbac.role.changed')
+  handleRoleChanged(payload: { roleId: string }) {
+    // Invalider tout le cache car on ne sait pas quels utilisateurs sont affectés
+    this.invalidateAllCache();
   }
 }

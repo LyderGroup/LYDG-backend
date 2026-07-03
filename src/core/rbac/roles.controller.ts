@@ -12,43 +12,76 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, In, Repository } from 'typeorm';
+import { IsString, IsOptional, IsBoolean, IsNumber, IsEnum, IsArray, IsUUID } from 'class-validator';
 import { Role } from './role.entity';
-import { RolesGuard } from './roles.guard';
-import { Roles } from './roles.decorator';
+import { PermissionGuard } from './permission.guard';
+import { RequirePermission } from './require-permission.decorator';
+import { GLOBAL_PERMISSIONS } from '../global/global.permissions';
 
 class CreateRoleDto {
+  @IsUUID()
+  @IsOptional()
   organizationId?: string | null;
+
+  @IsString()
   name!: string;
+
+  @IsString()
   code!: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsNumber()
+  @IsOptional()
   roleLevel?: number;
-  isSystemRole?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
   isDefault?: boolean;
 }
 
 class UpdateRoleDto {
+  @IsString()
+  @IsOptional()
   name?: string;
+
+  @IsString()
+  @IsOptional()
   description?: string | null;
+
+  @IsNumber()
+  @IsOptional()
   roleLevel?: number;
-  isSystemRole?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
   isDefault?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
   isActive?: boolean;
 }
 
 class BulkRoleActionDto {
+  @IsEnum(['soft-delete', 'restore', 'activate', 'deactivate'])
   action!: 'soft-delete' | 'restore' | 'activate' | 'deactivate';
+
+  @IsArray()
+  @IsString({ each: true })
   ids!: string[];
 }
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/rbac/roles')
 export class RolesController {
   constructor(
     @InjectRepository(Role)
     private readonly rolesRepo: Repository<Role>,
-  ) {}
+  ) { }
 
   @Get()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_READ_ALL)
   async findAll(@Req() req: any) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
@@ -65,34 +98,67 @@ export class RolesController {
     const includeInactive =
       query.includeInactive === 'true' || query.includeInactive === true;
 
-    const qb = this.rolesRepo.createQueryBuilder('r');
+    // Utiliser find() avec relations pour éviter l'erreur QueryBuilder avec ORDER BY
+    const findOptions: any = {
+      relations: ['rolePermissions', 'rolePermissions.permission'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    };
+
+    const whereConditions: any = {};
 
     if (orgId) {
-      qb.where(
-        '(r.organization_id = :orgId OR (r.organization_id IS NULL AND r.is_system_role = true))',
-        { orgId },
-      );
-    } else {
-      qb.where('1 = 1');
+      whereConditions.organizationId = orgId;
     }
 
     if (!includeInactive) {
-      qb.andWhere('r.is_active = true');
+      whereConditions.isActive = true;
     }
 
+    // Pour la recherche, on doit utiliser QueryBuilder
     if (search) {
+      const qb = this.rolesRepo.createQueryBuilder('r')
+        .leftJoinAndSelect('r.rolePermissions', 'rp')
+        .leftJoinAndSelect('rp.permission', 'p');
+
+      if (orgId) {
+        qb.where('r.organizationId = :orgId', { orgId });
+      } else {
+        qb.where('1 = 1');
+      }
+
+      if (!includeInactive) {
+        qb.andWhere('r.isActive = :isActive', { isActive: true });
+      }
+
       const term = `%${search.toLowerCase()}%`;
       qb.andWhere(
         '(LOWER(r.name) LIKE :term OR LOWER(r.code) LIKE :term)',
         { term },
       );
+
+      // Utiliser un alias différent pour éviter le conflit avec ORDER BY
+      const [items, total] = await qb
+        .orderBy('r.createdAt', 'DESC')
+        .skip((page - 1) * limit)
+        .take(limit)
+        .getManyAndCount();
+
+      return {
+        data: items,
+        meta: {
+          total,
+          page,
+          limit,
+          pageCount: Math.ceil(total / limit) || 1,
+        },
+      };
     }
 
-    qb.orderBy('r.created_at', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit);
+    findOptions.where = Object.keys(whereConditions).length > 0 ? whereConditions : undefined;
 
-    const [items, total] = await qb.getManyAndCount();
+    const [items, total] = await this.rolesRepo.findAndCount(findOptions);
 
     return {
       data: items,
@@ -106,17 +172,14 @@ export class RolesController {
   }
 
   @Get(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN', 'HR_MANAGER')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_READ)
   async findOne(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
 
     if (orgId) {
       return this.rolesRepo.findOne({
-        where: [
-          { id, organizationId: orgId },
-          { id, organizationId: IsNull(), isSystemRole: true },
-        ],
+        where: { id, organizationId: orgId },
       });
     }
 
@@ -124,7 +187,7 @@ export class RolesController {
   }
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_CREATE)
   async create(@Req() req: any, @Body() dto: CreateRoleDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = dto.organizationId ?? tenant?.id ?? null;
@@ -136,22 +199,19 @@ export class RolesController {
       throw new BadRequestException('Le code du rôle est obligatoire');
     }
 
-    const isSystemRole = orgId ? false : dto.isSystemRole ?? false;
-
     const role = this.rolesRepo.create({
       organizationId: orgId,
       name: dto.name,
       code: dto.code,
       description: dto.description ?? null,
       roleLevel: dto.roleLevel ?? 1,
-      isSystemRole,
       isDefault: dto.isDefault ?? false,
     });
     return this.rolesRepo.save(role);
   }
 
   @Patch(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_EDIT)
   async update(
     @Req() req: any,
     @Param('id') id: string,
@@ -164,7 +224,6 @@ export class RolesController {
     if (typeof dto.name === 'string') patch.name = dto.name;
     if (dto.description !== undefined) patch.description = dto.description;
     if (typeof dto.roleLevel === 'number') patch.roleLevel = dto.roleLevel;
-    if (typeof dto.isSystemRole === 'boolean') patch.isSystemRole = dto.isSystemRole;
     if (typeof dto.isDefault === 'boolean') patch.isDefault = dto.isDefault;
     if (typeof dto.isActive === 'boolean') patch.isActive = dto.isActive;
 
@@ -179,7 +238,7 @@ export class RolesController {
   }
 
   @Delete(':id')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_DELETE)
   async softDelete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
@@ -194,7 +253,7 @@ export class RolesController {
   }
 
   @Post(':id/restore')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_EDIT)
   async restore(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
@@ -209,7 +268,7 @@ export class RolesController {
   }
 
   @Delete(':id/hard')
-  @Roles('SUPER_ADMIN')
+  @RequirePermission(GLOBAL_PERMISSIONS.SYSTEM_ADMIN)
   async hardDelete(@Req() req: any, @Param('id') id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
@@ -224,7 +283,7 @@ export class RolesController {
   }
 
   @Post('bulk')
-  @Roles('SUPER_ADMIN', 'ORG_ADMIN')
+  @RequirePermission(GLOBAL_PERMISSIONS.ROLE_EDIT)
   async bulk(@Req() req: any, @Body() dto: BulkRoleActionDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;

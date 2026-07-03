@@ -10,6 +10,7 @@ import {
 import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type BonusCategory = 'PERFORMANCE' | 'EXCEPTIONAL' | 'RETENTION' | 'CERTIFICATION' | 'TERRAIN' | 'OTHER';
 export type BonusStatus = 'pending' | 'approved' | 'paid' | 'cancelled';
 
@@ -36,7 +37,8 @@ export class EmployeeBonus {
   periodYear!: number;
 
   // Montant
-  @Column({ type: 'decimal', precision: 15, scale: 2 })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2 })
   amount!: number;
 
   @Column({ type: 'varchar', length: 3, default: 'XOF' })
@@ -51,6 +53,7 @@ export class EmployeeBonus {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'score_value',

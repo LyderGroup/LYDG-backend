@@ -12,11 +12,12 @@ import { Organization } from '../organizations/organizations.entity';
 import { Department } from '../departments/department.entity';
 import { User } from '../users/user.entity';
 
+import { numericTransformer } from '../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_c_rh', name: 'employees' })
 export class Employee {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
- 
+
   @Column({ type: 'uuid', name: 'user_id', nullable: true })
   userId!: string | null;
 
@@ -57,7 +58,7 @@ export class Employee {
 
   @Column({ type: 'uuid', name: 'referral_employee_id', nullable: true })
   referralEmployeeId!: string | null;
- 
+
   @Column({ type: 'varchar', length: 50, name: 'employee_number' })
   employeeNumber!: string;
 
@@ -66,7 +67,7 @@ export class Employee {
 
   @Column({ type: 'varchar', length: 100, name: 'tax_id', nullable: true })
   taxId!: string | null;
- 
+
   @Column({ type: 'varchar', length: 255, name: 'job_title', nullable: true })
   jobTitle!: string | null;
 
@@ -87,8 +88,9 @@ export class Employee {
 
   @Column({ type: 'int', name: 'notice_period_days', default: 30 })
   noticePeriodDays!: number;
- 
-  @Column({ type: 'decimal', precision: 15, scale: 2, name: 'base_salary', nullable: true })
+
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2, name: 'base_salary', nullable: true })
   baseSalary!: number | null;
 
   @Column({ type: 'varchar', length: 3, name: 'salary_currency', default: 'XOF' })
@@ -96,16 +98,19 @@ export class Employee {
 
   @Column({ type: 'varchar', length: 20, name: 'payment_frequency', default: 'monthly' })
   paymentFrequency!: string;
- 
+
   @Column({ type: 'varchar', length: 255, name: 'birth_place', nullable: true })
   birthPlace!: string | null;
+
+  @Column({ type: 'date', name: 'birth_date', nullable: true })
+  birthDate!: Date | null;
 
   @Column({ type: 'varchar', length: 50, name: 'marital_status', nullable: true })
   maritalStatus!: string | null;
 
   @Column({ type: 'int', name: 'dependents_count', default: 0 })
   dependentsCount!: number;
- 
+
   @Column({ type: 'varchar', length: 255, name: 'emergency_contact_name', nullable: true })
   emergencyContactName!: string | null;
 
@@ -117,7 +122,7 @@ export class Employee {
 
   @Column({ type: 'varchar', length: 255, name: 'emergency_contact_email', nullable: true })
   emergencyContactEmail!: string | null;
- 
+
   @Column({ type: 'varchar', length: 50, name: 'employment_status', default: 'active' })
   employmentStatus!: string;
 
@@ -135,6 +140,18 @@ export class Employee {
 
   @Column({ type: 'simple-array', nullable: true })
   badges!: string[];
+
+  @Column({ type: 'time', name: 'work_start_time', nullable: true })
+  workStartTime!: string | null;
+
+  @Column({ type: 'time', name: 'work_end_time', nullable: true })
+  workEndTime!: string | null;
+
+  @Column({ type: 'simple-array', name: 'work_days', nullable: true })
+  workDays!: string[];
+
+  @Column({ type: 'int', name: 'annual_leave_days', nullable: true })
+  annualLeaveDays!: number | null;
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
   createdAt!: Date;

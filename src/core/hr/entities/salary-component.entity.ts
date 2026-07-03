@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { Organization } from '../../organizations/organizations.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type SalaryComponentType = 
   | 'BASE' 
   | 'DISPLACEMENT' 
@@ -55,7 +56,8 @@ export class SalaryComponent {
   @Column({ type: 'text', nullable: true })
   description!: string | null;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2 })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 15, scale: 2 })
   amount!: number;
 
   @Column({ type: 'varchar', length: 3, default: 'XOF' })

@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Kpi } from './kpi.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 @Entity({ schema: 'module_c_rh', name: 'evaluation_kpi_scores' })
 export class EvaluationKpiScore {
   @PrimaryGeneratedColumn('uuid')
@@ -28,10 +29,12 @@ export class EvaluationKpiScore {
   kpi!: Kpi;
 
   // Score brut
-  @Column({ type: 'decimal', precision: 5, scale: 2, name: 'raw_score' })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 5, scale: 2, name: 'raw_score' })
   rawScore!: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, name: 'raw_value', nullable: true })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 10, scale: 2, name: 'raw_value', nullable: true })
   rawValue!: number | null;
 
   @Column({ type: 'varchar', length: 20, name: 'raw_value_unit', nullable: true })
@@ -47,13 +50,15 @@ export class EvaluationKpiScore {
   // Pondération
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'weight_percent',
   })
   weightPercent!: number;
 
-  @Column({ type: 'decimal', precision: 5, scale: 2, name: 'weighted_score' })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 5, scale: 2, name: 'weighted_score' })
   weightedScore!: number;
 
   // Détails

@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { Organization } from '../../organizations/organizations.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type AccrualMethod = 'yearly' | 'monthly' | 'quarterly';
 
 @Entity({ schema: 'module_c_rh', name: 'leave_types' })
@@ -57,6 +58,7 @@ export class LeaveType {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 3,
     scale: 1,
     name: 'min_duration_days',
@@ -66,6 +68,7 @@ export class LeaveType {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 4,
     scale: 1,
     name: 'max_duration_days',

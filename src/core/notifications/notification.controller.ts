@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -111,6 +112,58 @@ export class NotificationController {
     return { success: true };
   } 
 
+  /**
+   * Envoie une notification de test (in-app + FCM Web Push) à l'utilisateur
+   * authentifié lui-même. Permet de vérifier en un clic que la chaîne
+   * complète fonctionne sans avoir à déclencher un événement métier réel
+   * (feedback, validation, etc.).
+   */
+  @Post('test-push')
+  @UseGuards(PermissionGuard)
+  @RequirePermission([], { moduleCode: 'core' })
+  async sendTestPush(@Req() req: any) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+
+    if (!tenant?.id) {
+      throw new BadRequestException('Missing tenant context');
+    }
+    if (!currentUser?.id) {
+      throw new UnauthorizedException('Missing authenticated user');
+    }
+
+    const title = 'Test de notification';
+    const body = `Si vous voyez ceci, la chaîne in-app + FCM fonctionne. (${new Date().toLocaleTimeString('fr-FR')})`;
+    const data = {
+      type: 'test_push',
+      sentAt: new Date().toISOString(),
+    };
+
+    await this.notificationService
+      .create({
+        userId: String(currentUser.id),
+        organizationId: String(tenant.id),
+        type: 'test_push',
+        title,
+        message: body,
+        data,
+      })
+      .catch(() => null);
+
+    const pushCount = await this.fcmService.sendToUser(
+      String(currentUser.id),
+      title,
+      body,
+      data,
+    );
+
+    return {
+      success: true,
+      inAppCreated: true,
+      pushSent: pushCount,
+    };
+  }
+
   @Post('fcm-token')
   @UseGuards(PermissionGuard)
   @RequirePermission([], { moduleCode: 'core' })
@@ -146,6 +199,21 @@ export class NotificationController {
   @UseGuards(PermissionGuard)
   @RequirePermission([], { moduleCode: 'core' })
   async unregisterFcmToken(@Req() req: any, @Body() body: { token: string }) {
+    return this.deactivateFcmToken(req, body);
+  }
+
+  /**
+   * Alias DELETE /core/notifications/fcm-token pour symétrie avec POST.
+   * Le frontend appelait DELETE auparavant — la route n'existait pas.
+   */
+  @Delete('fcm-token')
+  @UseGuards(PermissionGuard)
+  @RequirePermission([], { moduleCode: 'core' })
+  async deleteFcmToken(@Req() req: any, @Body() body: { token: string }) {
+    return this.deactivateFcmToken(req, body);
+  }
+
+  private async deactivateFcmToken(req: any, body: { token: string }) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
 
@@ -155,12 +223,11 @@ export class NotificationController {
     if (!currentUser?.id) {
       throw new UnauthorizedException('Missing authenticated user');
     }
-    if (!body.token) {
+    if (!body?.token) {
       throw new BadRequestException('FCM token is required');
     }
 
     await this.fcmService.deactivateToken(body.token);
-
     return { success: true };
   }
 }

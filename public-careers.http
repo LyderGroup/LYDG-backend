@@ -1,0 +1,76 @@
+### Variables
+@baseUrl = http://localhost:3000
+@slug = test-software-engineer
+@fingerprint = test-fp-001
+
+### 1. Liste des offres publiques
+GET {{baseUrl}}/public/careers/jobs?page=1&limit=20
+
+### 1b. Liste avec recherche full-text
+GET {{baseUrl}}/public/careers/jobs?search=engineer&limit=10
+
+### 1c. Liste filtrée par organisation
+GET {{baseUrl}}/public/careers/jobs?organizationCode=LYDG
+
+### 2. Détail d'une offre par slug
+GET {{baseUrl}}/public/careers/jobs/{{slug}}
+
+### 3. Postuler (cas OK)
+POST {{baseUrl}}/public/careers/jobs/{{slug}}/apply
+Content-Type: application/json
+X-Device-Fingerprint: {{fingerprint}}
+
+{
+  "fullName": "Marie Dupont",
+  "email": "marie.dupont@example.com",
+  "phone": "+33612345678",
+  "coverLetter": "Je suis très intéressée par ce poste, mon profil correspond.",
+  "cvUrl": "https://storage.supabase.co/uploads/cv/marie.pdf",
+  "cvMimeType": "application/pdf",
+  "cvSizeBytes": 524288,
+  "websiteField": ""
+}
+
+### 4. Postuler — HONEYPOT (doit retourner 400)
+POST {{baseUrl}}/public/careers/jobs/{{slug}}/apply
+Content-Type: application/json
+
+{
+  "fullName": "Bot Spammer",
+  "email": "bot@spam.com",
+  "cvUrl": "https://storage.supabase.co/uploads/cv/bot.pdf",
+  "websiteField": "https://spam.com"
+}
+
+### 5. Postuler — CV .exe (doit retourner 400)
+POST {{baseUrl}}/public/careers/jobs/{{slug}}/apply
+Content-Type: application/json
+
+{
+  "fullName": "Test User",
+  "email": "test@example.com",
+  "cvUrl": "https://storage.supabase.co/uploads/cv/file.exe"
+}
+
+### 6. Postuler — HTTP non-HTTPS (doit retourner 400)
+POST {{baseUrl}}/public/careers/jobs/{{slug}}/apply
+Content-Type: application/json
+
+{
+  "fullName": "Test User",
+  "email": "test@example.com",
+  "cvUrl": "http://insecure.com/cv.pdf"
+}
+
+### 7. Postuler — doublon (lancer 2× → 2e = 409)
+POST {{baseUrl}}/public/careers/jobs/{{slug}}/apply
+Content-Type: application/json
+
+{
+  "fullName": "Marie Dupont",
+  "email": "marie.dupont@example.com",
+  "cvUrl": "https://storage.supabase.co/uploads/cv/marie.pdf"
+}
+
+### 8. Slug inexistant (doit retourner 404)
+GET {{baseUrl}}/public/careers/jobs/this-slug-does-not-exist

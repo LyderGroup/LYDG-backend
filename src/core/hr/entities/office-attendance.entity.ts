@@ -11,6 +11,7 @@ import { Organization } from '../../organizations/organizations.entity';
 import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type AttendanceStatus = 'present' | 'absent' | 'late' | 'early_leave' | 'partial';
 
 @Entity({ schema: 'module_c_rh', name: 'office_attendances' })
@@ -52,6 +53,7 @@ export class OfficeAttendance {
   // Calcul
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 4,
     scale: 2,
     name: 'scheduled_hours',
@@ -61,6 +63,7 @@ export class OfficeAttendance {
 
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 4,
     scale: 2,
     name: 'actual_hours',
@@ -79,6 +82,11 @@ export class OfficeAttendance {
   // Justification
   @Column({ type: 'boolean', name: 'is_justified', default: false })
   isJustified!: boolean;
+
+  // BIS-2 : true si actual_check_out a été déclaré a posteriori
+  // (oubli de pointage complété par l'employé le lendemain).
+  @Column({ type: 'boolean', name: 'is_estimated_checkout', default: false })
+  isEstimatedCheckout!: boolean;
 
   @Column({ type: 'text', name: 'justification_notes', nullable: true })
   justificationNotes!: string | null;
@@ -100,7 +108,31 @@ export class OfficeAttendance {
   @Column({ type: 'text', nullable: true })
   notes!: string | null;
 
-  // Soft delete
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 10, scale: 7, name: 'check_in_latitude', nullable: true })
+  checkInLatitude!: number | null;
+
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 10, scale: 7, name: 'check_in_longitude', nullable: true })
+  checkInLongitude!: number | null;
+
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 10, scale: 7, name: 'check_out_latitude', nullable: true })
+  checkOutLatitude!: number | null;
+
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 10, scale: 7, name: 'check_out_longitude', nullable: true })
+  checkOutLongitude!: number | null;
+
+  @Column({ type: 'boolean', name: 'is_in_zone', default: true })
+  isInZone!: boolean;
+
+  @Column({ type: 'text', name: 'off_site_location', nullable: true })
+  offSiteLocation!: string | null;
+
+  @Column({ type: 'text', name: 'off_site_reason', nullable: true })
+  offSiteReason!: string | null;
+
   @Column({ type: 'timestamp', name: 'deleted_at', nullable: true })
   deletedAt!: Date | null;
 

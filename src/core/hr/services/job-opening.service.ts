@@ -70,7 +70,9 @@ export class JobOpeningService {
       qb.andWhere('LOWER(jo.job_title) LIKE :term', { term });
     }
 
-    qb.orderBy('jo.created_at', 'DESC')
+    // orderBy DOIT utiliser le nom de propriété camelCase (mappé par
+    // l'entité), pas le nom de colonne SQL.
+    qb.orderBy('jo.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -125,8 +127,53 @@ export class JobOpeningService {
   }
 
   async publish(organizationId: string, id: string) {
-    await this.repo.update({ id, organizationId }, { status: 'published' } as any);
+    // 1) Récupérer l'offre pour générer le slug à partir du titre
+    const job = await this.repo.findOne({ where: { id, organizationId } });
+    if (!job) {
+      return null;
+    }
+
+    // 2) Générer un slug unique si pas déjà fait (publication initiale)
+    const slug = job.slug || (await this.generateUniqueSlug(job.jobTitle));
+
+    // 3) Patch : status RH + visibilité publique (liveydream.com)
+    await this.repo.update(
+      { id, organizationId },
+      {
+        status: 'published',
+        visibilityState: 'published',
+        isPublic: true,
+        publishedAt: job.publishedAt ?? new Date(),
+        slug,
+      } as any,
+    );
     return this.findOne(organizationId, id);
+  }
+
+  async unpublish(organizationId: string, id: string) {
+    // Retire l'offre du public mais garde le slug (réactivable plus tard)
+    await this.repo.update(
+      { id, organizationId },
+      { visibilityState: 'archived', isPublic: false } as any,
+    );
+    return this.findOne(organizationId, id);
+  }
+
+  private async generateUniqueSlug(base: string): Promise<string> {
+    const normalized = base
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+
+    let attempt = 0;
+    while (true) {
+      const candidate = attempt ? `${normalized}-${attempt}` : normalized;
+      const exists = await this.repo.count({ where: { slug: candidate } });
+      if (!exists) return candidate;
+      attempt += 1;
+    }
   }
 
   async close(organizationId: string, id: string) {

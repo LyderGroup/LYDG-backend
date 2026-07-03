@@ -15,6 +15,8 @@ import { TaskWorkflowValidation } from './task-workflow-validation.entity';
 import { ValidationRequest } from './validation-request.entity';
 import { InAppNotificationService } from '../notifications/in-app-notification.service';
 import { FcmService } from '../notifications/fcm.service';
+import { PROJECT_PERMISSIONS } from './project.permissions';
+import { ProjectsRealtimeService } from './projects-realtime.service';
 
 export interface ValidationContext {
   userId: string;
@@ -46,12 +48,67 @@ export class WorkflowValidationService {
     private readonly dataSource: DataSource,
     private readonly notificationService: InAppNotificationService,
     private readonly fcmService: FcmService,
+    private readonly realtime: ProjectsRealtimeService,
   ) {}
-  async assertCanTransition(ctx: ValidationContext, taskId: string): Promise<void> {
-    const task = await this.taskRepo.findOne({
-      where: { id: taskId, organizationId: ctx.organizationId },
-      relations: ['currentStep'],
+  /**
+   * Trouve une task accessible par le user dans son tenant OU via membership
+   * cross-org. Retourne null si introuvable; throw Forbidden si trouvée mais
+   * inaccessible.
+   */
+  private async findTaskAccessibleByUser(
+    taskId: string,
+    userId: string,
+    contextOrgId: string,
+    options: { manager?: EntityManager; relations?: string[] } = {},
+  ): Promise<Task | null> {
+    const repo = options.manager ? options.manager.getRepository(Task) : this.taskRepo;
+
+    // 1) Cas standard : task dans le tenant du user.
+    const sameOrg = await repo.findOne({
+      where: { id: taskId, organizationId: contextOrgId },
+      relations: options.relations,
     });
+    if (sameOrg) return sameOrg;
+
+    // 2) Cas cross-org : task dans une autre organisation → autoriser si le
+    // user est membre/manager/créateur du projet.
+    const anyOrg = await repo.findOne({
+      where: { id: taskId },
+      relations: options.relations,
+    });
+    if (!anyOrg) return null;
+
+    const access: Array<{ ok: number }> = await repo.manager.query(
+      `
+      SELECT 1 AS ok
+      FROM module_b_projects.projects p
+      LEFT JOIN module_b_projects.project_members pm
+        ON pm.project_id = p.id AND pm.user_id = $2
+      LEFT JOIN module_b_projects.project_managers pma
+        ON pma.project_id = p.id AND pma.user_id = $2
+      WHERE p.id = $1
+        AND p.deleted_at IS NULL
+        AND (
+          pm.id IS NOT NULL OR pma.id IS NOT NULL
+          OR p.manager_id = $2 OR p.created_by = $2
+        )
+      LIMIT 1
+      `,
+      [anyOrg.projectId, userId],
+    );
+    if (access.length === 0) {
+      throw new ForbiddenException('Task not accessible in this tenant');
+    }
+    return anyOrg;
+  }
+
+  async assertCanTransition(ctx: ValidationContext, taskId: string): Promise<void> {
+    const task = await this.findTaskAccessibleByUser(
+      taskId,
+      ctx.userId,
+      ctx.organizationId,
+      { relations: ['currentStep'] },
+    );
 
     if (!task) {
       throw new NotFoundException('Task not found');
@@ -96,10 +153,43 @@ export class WorkflowValidationService {
     return this.dataSource.transaction(async (em) => {
       // Charger la tâche SANS relation pour le verrouillage pessimiste
       // (PostgreSQL ne permet pas FOR UPDATE avec LEFT JOIN) avant j'avais utiliser FOR UPDATE, et j'ai eu droit a des heurs de debugage
-      const task = await em.findOne(Task, {
+      let task = await em.findOne(Task, {
         where: { id: dto.taskId, organizationId: ctx.organizationId },
         lock: { mode: 'pessimistic_write' },
       });
+
+      // Cas cross-org : task dans une autre organisation mais user membre du
+      // projet (multi-département/multi-org). On vérifie l'accès via membership.
+      if (!task) {
+        const anyOrg = await em.findOne(Task, {
+          where: { id: dto.taskId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (anyOrg) {
+          const access: Array<{ ok: number }> = await em.query(
+            `
+            SELECT 1 AS ok
+            FROM module_b_projects.projects p
+            LEFT JOIN module_b_projects.project_members pm
+              ON pm.project_id = p.id AND pm.user_id = $2
+            LEFT JOIN module_b_projects.project_managers pma
+              ON pma.project_id = p.id AND pma.user_id = $2
+            WHERE p.id = $1
+              AND p.deleted_at IS NULL
+              AND (
+                pm.id IS NOT NULL OR pma.id IS NOT NULL
+                OR p.manager_id = $2 OR p.created_by = $2
+              )
+            LIMIT 1
+            `,
+            [anyOrg.projectId, ctx.userId],
+          );
+          if (access.length === 0) {
+            throw new ForbiddenException('Task not accessible in this tenant');
+          }
+          task = anyOrg;
+        }
+      }
 
       if (!task) {
         throw new NotFoundException('Task not found');
@@ -115,8 +205,38 @@ export class WorkflowValidationService {
         }
       }
 
+      // Auto-init : si la task n'a pas encore d'étape de workflow (cas des
+      // tasks créées avant le câblage du workflow), on rattache la 1ère
+      // étape du workflow du projet — pas d'erreur, juste un setup à la volée.
+      if (!task.currentStepId && task.projectId) {
+        const firstStep: any = await em.query(
+          `
+          SELECT s.id, s.workflow_id
+          FROM module_b_projects.project_workflow_steps s
+          INNER JOIN module_b_projects.project_workflows w ON w.id = s.workflow_id
+          WHERE w.project_id = $1
+            AND (s.deleted_at IS NULL)
+            AND (w.deleted_at IS NULL)
+          ORDER BY s.step_order ASC
+          LIMIT 1
+          `,
+          [task.projectId],
+        );
+        if (firstStep?.[0]?.id) {
+          task.workflowId = firstStep[0].workflow_id;
+          task.currentStepId = firstStep[0].id;
+          await em.update(
+            Task,
+            { id: task.id },
+            { workflowId: task.workflowId, currentStepId: task.currentStepId } as any,
+          );
+        }
+      }
+
       if (!task.currentStepId) {
-        throw new BadRequestException('No workflow step');
+        throw new BadRequestException(
+          'Cette tâche n\'a pas de workflow configuré. Cliquez d\'abord sur "Étape suivante" pour initialiser le workflow.',
+        );
       }
 
       const step = await em.findOne(ProjectWorkflowStep, {
@@ -259,8 +379,12 @@ export class WorkflowValidationService {
 
     // Vérifier que l'utilisateur est l'assignee ou a les droits de gestion
     const isAssignee = task.assigneeId === ctx.userId;
-    const hasUpdatePermission = ctx.userPermissions.some(p => 
-      p.includes('projects.task.update') || p.includes('projects.task.validate')
+    const updateOrValidateCodes = [
+      ...PROJECT_PERMISSIONS.TASK.UPDATE.ALL_SCOPES,
+      ...PROJECT_PERMISSIONS.TASK.VALIDATE.ALL_SCOPES,
+    ];
+    const hasUpdatePermission = ctx.userPermissions.some(p =>
+      updateOrValidateCodes.includes(p),
     );
     
     if (!isAssignee && !hasUpdatePermission) {
@@ -299,6 +423,16 @@ export class WorkflowValidationService {
     } catch (notifError) {
       console.error('[WorkflowValidation] Notification error (non-blocking):', notifError);
     }
+
+    // Émission realtime
+    this.realtime.emitValidationRequested({
+      organizationId: ctx.organizationId,
+      projectId: task.projectId,
+      taskId: task.id,
+      requestId: savedRequest.id,
+      stepId: step.id,
+      requesterId: ctx.userId,
+    });
 
     return savedRequest;
   }
@@ -509,10 +643,21 @@ export class WorkflowValidationService {
         }
       }
 
+      // Émission realtime (hors callback notif pour éviter les doubles try)
+      this.realtime.emitValidationApproved({
+        organizationId: ctx.organizationId,
+        projectId: task.projectId,
+        taskId: task.id,
+        requestId: request.id,
+        stepId: step.id,
+        requesterId: request.requesterId,
+        assigneeId: task.assigneeId,
+      });
+
       return validation;
     });
   }
- 
+
   async rejectValidationRequest(
     ctx: ValidationContext,
     requestId: string,
@@ -601,6 +746,18 @@ export class WorkflowValidationService {
         }
       }
 
+      // Émission realtime
+      this.realtime.emitValidationRejected({
+        organizationId: ctx.organizationId,
+        projectId: task.projectId,
+        taskId: task.id,
+        requestId: request.id,
+        stepId: step.id,
+        reason,
+        requesterId: request.requesterId,
+        assigneeId: task.assigneeId,
+      });
+
       return request;
     });
   }
@@ -659,14 +816,14 @@ export class WorkflowValidationService {
 
     // Cas 1 : permission globale de validation
     if (
-      ctx.userPermissions.includes('projects.task.validate.tenant') ||
-      ctx.userPermissions.includes('projects.task.validate.global')
+      ctx.userPermissions.includes(PROJECT_PERMISSIONS.TASK.VALIDATE.TENANT) ||
+      ctx.userPermissions.includes(PROJECT_PERMISSIONS.TASK.VALIDATE.GLOBAL)
     ) {
       return;
     }
 
     // Cas 2 : permission de validation au niveau projet
-    if (ctx.userPermissions.includes('projects.task.validate.project')) {
+    if (ctx.userPermissions.includes(PROJECT_PERMISSIONS.TASK.VALIDATE.PROJECT)) {
       const member = await em.findOne(ProjectMember, {
         where: {
           projectId: task.projectId,

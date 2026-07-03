@@ -1,13 +1,16 @@
 import { Controller, Get, Req, UseGuards } from '@nestjs/common';
-import { RolesGuard } from '../rbac/roles.guard';
+import { PermissionGuard } from '../rbac/permission.guard';
+import { RequirePermission } from '../rbac/require-permission.decorator';
+import { PILOTAGE_MODULE_CODE, PILOTAGE_PERMISSIONS } from './pilotage.permissions';
 import { PilotageService } from './pilotage.service';
 
-@UseGuards(RolesGuard)
+@UseGuards(PermissionGuard)
 @Controller('core/pilotage/dashboard')
 export class PilotageDashboardController {
   constructor(private readonly pilotageService: PilotageService) {}
 
   @Get()
+  @RequirePermission(PILOTAGE_PERMISSIONS.PILOTAGE_DASHBOARD_READ, { moduleCode: PILOTAGE_MODULE_CODE })
   async getDashboard(@Req() req: any): Promise<any> {
     const tenant = req.tenant as { id?: string } | undefined;
     const query = req.query ?? {};

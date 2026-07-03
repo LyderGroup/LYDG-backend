@@ -12,6 +12,7 @@ import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 import { ElectronicSignature } from './electronic-signature.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type WarningType = 'VERBAL' | 'WRITTEN' | 'FINAL';
 export type SanctionStatus = 'active' | 'served' | 'cancelled' | 'appealed';
 
@@ -60,6 +61,7 @@ export class EmployeeSanction {
   // Conséquences
   @Column({
     type: 'decimal',
+    transformer: numericTransformer,
     precision: 5,
     scale: 2,
     name: 'bonus_retention_percent',

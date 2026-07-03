@@ -1,14 +1,13 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
 import { User } from './user.entity';
 import { LoginHistory } from './login-history.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { Role } from '../rbac/role.entity';
-
 interface ListUsersOptions {
   page?: number;
   limit?: number;
@@ -21,6 +20,8 @@ interface UpdateUserInput {
   firstName?: string;
   lastName?: string;
   phone?: string | null;
+  gender?: string | null;
+  birthDate?: string | null;
   language?: string | null;
   timezone?: string | null;
   department?: string | null;
@@ -29,10 +30,12 @@ interface UpdateUserInput {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
   private firebaseInitialized = false;
 
   constructor(
     private readonly configService: ConfigService,
+    private readonly dataSource: DataSource,
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     @InjectRepository(LoginHistory)
@@ -41,7 +44,7 @@ export class UsersService {
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(Role)
     private readonly rolesRepo: Repository<Role>,
-  ) {}
+  ) { }
 
   private ensureFirebaseApp(): void {
     if (this.firebaseInitialized && admin.apps.length > 0) {
@@ -141,104 +144,86 @@ export class UsersService {
       throw new BadRequestException('Rôle invalide');
     }
 
-    const roleCode = (role as any).code as string | undefined;
-    const normalizedRoleCode = typeof roleCode === 'string' ? roleCode.trim() : '';
-    const isSystemRole = (role as any).isSystemRole === true;
-    const isSuperAdmin = normalizedRoleCode === 'SUPER_ADMIN';
-    const skipDepartment = isSystemRole || isSuperAdmin;
-
-    if (!skipDepartment) {
-      if (!payload.department || !String(payload.department).trim()) {
-        throw new BadRequestException('Le département est obligatoire');
-      }
+    // Plus de rôle système - le département est obligatoire pour tous
+    if (!payload.department || !String(payload.department).trim()) {
+      throw new BadRequestException('Le département est obligatoire');
     }
 
-    const user = this.usersRepo.create({
-      organizationId,
-      email: payload.email,
-      username: null,
-      firstName: payload.firstName,
-      lastName: payload.lastName,
-      phone: payload.phone ?? null,
-      // Générer un mot de passe temporaire aléatoire (l'utilisateur devra le définir via Firebase ou reset)
-      passwordHash: crypto.randomBytes(32).toString('hex'),
-      passwordSalt: crypto.randomBytes(16).toString('hex'),
-      language: payload.language ?? 'fr',
-      timezone: payload.timezone ?? null,
-      is2faEnabled: false,
-      twoFactorMethod: null,
-      emailVerified: false,
-      isActive: true,
-      isLocked: false,
-      lockedUntil: null,
-      lastLoginAt: null,
-      lastLoginIp: null,
-      loginCount: 0,
-      externalId: null,
-      metadata: {
-        department: skipDepartment ? null : (payload.department ?? null),
-      },
-      createdBy: currentUserId,
-      updatedBy: currentUserId,
-    });
-
-    const savedUser = await this.usersRepo.save(user);
-
-    const userRole = this.userRolesRepo.create({
-      userId: savedUser.id,
-      roleId: role.id,
-      assignedBy: currentUserId,
-      expiresAt: null,
-    });
-    await this.userRolesRepo.save(userRole);
-
-    // Invitation Firebase: créer le compte si besoin + envoyer un lien de création/réinitialisation de mot de passe.
+    // 1) Créer l'utilisateur Firebase d'abord (idempotent : on récupère
+    //    l'existant). Si Firebase échoue, la transaction DB est rollback,
+    //    évitant les comptes "zombies" sans externalId.
+    this.ensureFirebaseApp();
+    let firebaseUser: admin.auth.UserRecord | null = null;
     try {
-      this.ensureFirebaseApp();
-
-      let firebaseUser: admin.auth.UserRecord | null = null;
+      firebaseUser = await admin.auth().getUserByEmail(payload.email);
+    } catch {
+      firebaseUser = null;
+    }
+    if (!firebaseUser) {
       try {
-        firebaseUser = await admin.auth().getUserByEmail(savedUser.email);
-      } catch {
-        firebaseUser = null;
-      }
-
-      if (!firebaseUser) {
         firebaseUser = await admin.auth().createUser({
-          email: savedUser.email,
-          displayName: `${savedUser.firstName} ${savedUser.lastName}`.trim(),
+          email: payload.email,
+          displayName: `${payload.firstName} ${payload.lastName}`.trim(),
           disabled: false,
         });
-      }
-
-      if (!savedUser.externalId) {
-        await this.usersRepo.update(savedUser.id, { externalId: firebaseUser.uid });
-        savedUser.externalId = firebaseUser.uid;
-      }
-
-      // Envoyer un email de définition de mot de passe via Firebase
-      try {
-        const resetLink = await admin.auth().generatePasswordResetLink(savedUser.email, {
-          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/set-password`,
-          handleCodeInApp: true,
-        });
-        console.log(`[INVITE] Password reset link generated for ${savedUser.email}`);
-        // Firebase envoie automatiquement l'email si on utilise le lien dans un template
-        // Pour l'instant on log le lien, mais en production il faudrait utiliser un service d'email
-        console.log(`[INVITE] Reset link : ${resetLink}`);
-      } catch (resetErr) {
-        console.error('[INVITE] Failed to generate password reset link:', resetErr);
-      }
-    } catch (err) {
-      console.error('[INVITE] Failed to generate/send reset link', err); 
-      if (!savedUser.externalId) {
-        console.error(`[INVITE] User ${savedUser.id} created in DB but has no Firebase UID - will not be able to login`);
+      } catch (err) {
+        throw new BadRequestException(
+          `Échec de la création du compte Firebase: ${(err as Error).message}`,
+        );
       }
     }
- 
-    if (!savedUser.externalId) {
-      console.warn(`[INVITE] Warning: User ${savedUser.id} (${savedUser.email}) has no externalId - Firebase invitation may have failed`);
-    }
+    const externalId = firebaseUser.uid;
+
+    // 2) Création atomique en DB (user + user_role) + lien Firebase UID.
+    const savedUser = await this.dataSource.transaction(async (manager) => {
+      const usersRepo = manager.getRepository(User);
+      const userRolesRepo = manager.getRepository(UserRole);
+
+      const user = usersRepo.create({
+        organizationId,
+        email: payload.email,
+        username: null,
+        firstName: payload.firstName,
+        lastName: payload.lastName,
+        phone: payload.phone ?? null,
+        // Mot de passe temporaire aléatoire (l'utilisateur passe par Firebase).
+        passwordHash: crypto.randomBytes(32).toString('hex'),
+        passwordSalt: crypto.randomBytes(16).toString('hex'),
+        language: payload.language ?? 'fr',
+        timezone: payload.timezone ?? null,
+        is2faEnabled: false,
+        twoFactorMethod: null,
+        emailVerified: false,
+        isActive: true,
+        isLocked: false,
+        lockedUntil: null,
+        lastLoginAt: null,
+        lastLoginIp: null,
+        loginCount: 0,
+        externalId,
+        metadata: { department: payload.department ?? null },
+        createdBy: currentUserId,
+        updatedBy: currentUserId,
+      });
+
+      const persisted = await usersRepo.save(user);
+
+      const userRole = userRolesRepo.create({
+        userId: persisted.id,
+        roleId: role.id,
+        assignedBy: currentUserId,
+        expiresAt: null,
+      });
+      await userRolesRepo.save(userRole);
+
+      return persisted;
+    });
+
+    // 3) L'email d'invitation est envoyé par le frontend via le SDK Firebase
+    //    client (sendPasswordResetEmail) après la réponse de cette route.
+    //    Voir App.tsx:1334. Le backend n'orchestre plus l'envoi pour éviter
+    //    le double appel et la dépendance SMTP custom.
+    this.logger.log(`User Firebase + DB créé (id=${savedUser.id}). Envoi email géré côté frontend.`);
 
     return savedUser;
   }
@@ -259,6 +244,12 @@ export class UsersService {
     }
     if (input.phone !== undefined) {
       patch.phone = input.phone;
+    }
+    if (input.gender !== undefined) {
+      patch.gender = input.gender;
+    }
+    if (input.birthDate !== undefined) {
+      patch.birthDate = input.birthDate ? new Date(input.birthDate) : null;
     }
     if (input.language !== undefined) {
       patch.language = input.language ?? 'fr';
@@ -288,6 +279,85 @@ export class UsersService {
     await this.usersRepo.update({ id, organizationId }, patch as any);
 
     return this.usersRepo.findOne({ where: { id, organizationId } });
+  }
+
+  /**
+   * Profil "me" : user + rôle actif + employé (work times). Une seule requête SQL.
+   * Utilisé par GET /core/users/me/profile pour l'initialisation du frontend.
+   */
+  async findOwnProfile(
+    organizationId: string,
+    userId: string,
+  ): Promise<{
+    user: {
+      id: string;
+      email: string | null;
+      firstName: string | null;
+      lastName: string | null;
+      birthDate: string | null;
+      employeeId: string | null;
+      workStartTime: string | null;
+      workEndTime: string | null;
+    };
+    role: { id: string; name: string; code: string } | null;
+  } | null> {
+    const rows: Array<{
+      id: string;
+      email: string | null;
+      first_name: string | null;
+      last_name: string | null;
+      birth_date: string | null;
+      employee_id: string | null;
+      work_start_time: string | null;
+      work_end_time: string | null;
+      role_id: string | null;
+      role_name: string | null;
+      role_code: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT
+        u.id,
+        u.email,
+        u.first_name,
+        u.last_name,
+        TO_CHAR(u.birth_date, 'YYYY-MM-DD') AS birth_date,
+        e.id AS employee_id,
+        e.work_start_time,
+        e.work_end_time,
+        r.id AS role_id,
+        r.name AS role_name,
+        r.code AS role_code
+      FROM core.users u
+      LEFT JOIN module_c_rh.employees e ON e.user_id = u.id
+      LEFT JOIN core.user_roles ur
+        ON ur.user_id = u.id
+       AND ur.is_active = true
+       AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+      LEFT JOIN core.roles r ON r.id = ur.role_id AND r.is_active = true
+      WHERE u.id = $1 AND u.organization_id = $2
+      ORDER BY ur.assigned_at DESC NULLS LAST
+      LIMIT 1
+      `,
+      [userId, organizationId],
+    );
+
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      user: {
+        id: row.id,
+        email: row.email,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        birthDate: row.birth_date,
+        employeeId: row.employee_id,
+        workStartTime: row.work_start_time,
+        workEndTime: row.work_end_time,
+      },
+      role: row.role_id
+        ? { id: row.role_id, name: row.role_name ?? '', code: row.role_code ?? '' }
+        : null,
+    };
   }
 
   async getActiveRoleForUser(

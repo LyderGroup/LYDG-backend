@@ -19,22 +19,24 @@ export class InAppNotificationService {
     @InjectRepository(Notification)
     private readonly notificationRepo: Repository<Notification>,
     private readonly realtimeService: NotificationsRealtimeService,
-  ) {}
- 
+  ) { }
+
   async create(dto: CreateNotificationDto): Promise<Notification> {
+    const mergedData = { ...(dto.data ?? {}), notificationType: dto.type };
     const notification = this.notificationRepo.create({
       userId: dto.userId,
       organizationId: dto.organizationId,
+      // Colonne DB legacy NOT NULL — il faut la remplir.
       type: dto.type,
       title: dto.title,
-      message: dto.message ?? null,
-      data: dto.data ?? null,
+      // message NOT NULL en DB → fallback titre si vide pour ne pas violer la contrainte.
+      message: dto.message ?? dto.title,
+      data: mergedData,
       isRead: false,
     });
 
     const saved = await this.notificationRepo.save(notification);
-
-    // Émettre en temps réel
+ 
     try {
       this.realtimeService.emitNotificationCreated({
         userId: saved.userId,
@@ -55,17 +57,18 @@ export class InAppNotificationService {
   }
 
   async createMany(dtos: CreateNotificationDto[]): Promise<Notification[]> {
-    const notifications = dtos.map(dto => 
-      this.notificationRepo.create({
+    const notifications = dtos.map(dto => {
+      const mergedData = { ...(dto.data ?? {}), notificationType: dto.type };
+      return this.notificationRepo.create({
         userId: dto.userId,
         organizationId: dto.organizationId,
         type: dto.type,
         title: dto.title,
-        message: dto.message ?? null,
-        data: dto.data ?? null,
+        message: dto.message ?? dto.title,
+        data: mergedData,
         isRead: false,
-      })
-    );
+      });
+    });
 
     const saved = await this.notificationRepo.save(notifications);
 

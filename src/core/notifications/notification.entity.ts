@@ -21,7 +21,28 @@ export type NotificationType =
   | 'project_comment'
   | 'project_status_changed'
   | 'mention'
-  | 'deadline_reminder';
+  | 'deadline_reminder'
+  // RH
+  | 'leave_deduction_applied'
+  | 'leave_deduction_cancelled'
+  | 'leave_balance_negative'
+  | 'attendance_late_reminder'
+  | 'attendance_checkout_reminder'
+  | 'attendance_incomplete_yesterday'
+  // Heures supplémentaires
+  | 'overtime_detected'
+  | 'payday_overtime_summary'
+  // Discipline
+  | 'sanction_applied'
+  | 'sanction_threshold_approaching'
+  | 'sanction_admin_alert'
+  // Vie interne / Events
+  | 'event_published'
+  | 'event_invitation'
+  // Journal de bord
+  | 'journal_feedback'
+  // Diagnostic
+  | 'test_push';
 
 @Entity({ schema: 'core', name: 'notifications' })
 @Index(['userId', 'isRead'])
@@ -40,18 +61,17 @@ export class Notification {
   @Column({ type: 'uuid', name: 'organization_id' })
   organizationId!: string;
 
-  @Column({
-    type: 'varchar',
-    length: 50,
-    name: 'notification_type',
-  })
+  // Colonne `type` NOT NULL côté DB (legacy). On la matérialise pour que
+  // TypeORM l'inclue dans l'INSERT — sinon violation NOT NULL.
+  // `data.notificationType` est conservé pour rétro-compat avec l'UI.
+  @Column({ type: 'varchar', length: 50 })
   type!: NotificationType;
 
   @Column({ type: 'varchar', length: 255 })
   title!: string;
 
-  @Column({ type: 'text', nullable: true })
-  message!: string | null;
+  @Column({ type: 'text', nullable: false })
+  message!: string;
 
   @Column({ type: 'jsonb', nullable: true })
   data!: Record<string, any> | null;

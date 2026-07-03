@@ -11,6 +11,7 @@ import { Employee } from '../employee.entity';
 import { LeaveType } from './leave-type.entity';
 import { User } from '../../users/user.entity';
 
+import { numericTransformer } from '../../../common/typeorm/numeric-transformer';
 export type LeaveRequestStatus =
   | 'draft'
   | 'pending'
@@ -63,13 +64,16 @@ export class LeaveRequest {
   })
   endPeriod!: DayPeriod;
 
-  @Column({ type: 'decimal', precision: 4, scale: 1, name: 'total_days' })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 4, scale: 1, name: 'total_days' })
   totalDays!: number;
 
-  @Column({ type: 'decimal', precision: 4, scale: 1, name: 'weekends_count', default: 0 })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 4, scale: 1, name: 'weekends_count', default: 0 })
   weekendsCount!: number;
 
-  @Column({ type: 'decimal', precision: 4, scale: 1, name: 'holidays_count', default: 0 })
+  @Column({ type: 'decimal',
+    transformer: numericTransformer, precision: 4, scale: 1, name: 'holidays_count', default: 0 })
   holidaysCount!: number;
 
   @Column({ type: 'text', nullable: true })
@@ -116,6 +120,18 @@ export class LeaveRequest {
 
   @Column({ type: 'jsonb', default: [] })
   attachments!: any[];
+
+  @Column({ type: 'boolean', name: 'is_joker', default: false })
+  isJoker!: boolean;
+
+  @Column({ type: 'boolean', name: 'is_partial', default: false })
+  isPartial!: boolean;
+
+  @Column({ type: 'time', name: 'start_time', nullable: true })
+  startTime!: string | null;
+
+  @Column({ type: 'time', name: 'end_time', nullable: true })
+  endTime!: string | null;
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
   createdAt!: Date;

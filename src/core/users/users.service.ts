@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
+import * as https from 'https';
 import * as crypto from 'crypto';
 import { User } from './user.entity';
 import { LoginHistory } from './login-history.entity';
@@ -62,12 +63,24 @@ export class UsersService {
     privateKey = privateKey.replace(/\\n/g, '\n');
 
     if (!admin.apps.length) {
+      // Custom HTTP agent with better timeout and keep-alive settings
+      // to handle Render's egress issues with googleapis.com
+      const httpAgent = new https.Agent({
+        keepAlive: true,
+        keepAliveMsecs: 30000,
+        maxSockets: 5,
+        maxFreeSockets: 2,
+        timeout: 10000,
+        scheduling: 'fifo',
+      });
+
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId,
           clientEmail,
           privateKey,
         }),
+        httpAgent,
       });
     }
 

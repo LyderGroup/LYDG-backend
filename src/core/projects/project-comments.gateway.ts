@@ -8,6 +8,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import * as admin from 'firebase-admin';
+import * as https from 'https';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -57,12 +58,24 @@ export class ProjectCommentsGateway {
 
     privateKey = privateKey.replace(/\\n/g, '\n');
 
+    // Custom HTTP agent with better timeout and keep-alive settings
+    // to handle Render's egress issues with googleapis.com
+    const httpAgent = new https.Agent({
+      keepAlive: true,
+      keepAliveMsecs: 30000,
+      maxSockets: 5,
+      maxFreeSockets: 2,
+      timeout: 10000,
+      scheduling: 'fifo',
+    });
+
     admin.initializeApp({
       credential: admin.credential.cert({
         projectId,
         clientEmail,
         privateKey,
       }),
+      httpAgent,
     });
   }
 

@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
+import * as https from 'https';
 import { User } from '../users/user.entity';
 import { LoginHistory } from '../users/login-history.entity';
 import { Employee } from '../hr/employee.entity';
@@ -66,12 +67,24 @@ export class FirebaseAuthGuard implements CanActivate {
     privateKey = privateKey.replace(/\\n/g, '\n');
 
     if (!admin.apps.length) {
+      // Custom HTTP agent with better timeout and keep-alive settings
+      // to handle Render's egress issues with googleapis.com
+      const httpAgent = new https.Agent({
+        keepAlive: true,
+        keepAliveMsecs: 30000,
+        maxSockets: 5,
+        maxFreeSockets: 2,
+        timeout: 10000,
+        scheduling: 'fifo',
+      });
+
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId,
           clientEmail,
           privateKey,
         }),
+        httpAgent,
       });
     }
 
@@ -140,10 +153,37 @@ export class FirebaseAuthGuard implements CanActivate {
 
     this.ensureFirebaseApp();
 
-    let decodedToken: admin.auth.DecodedIdToken;
-    try {
-      decodedToken = await admin.auth().verifyIdToken(idToken);
-    } catch (error) {
+    // verifyIdToken doit récupérer les clés publiques Google (googleapis.com).
+    // Sur certains egress (IP PaaS), ce fetch échoue par intermittence (403/
+    // réseau) → on retente quelques fois AVANT de rejeter, mais uniquement sur
+    // les erreurs transitoires (pas sur un token réellement invalide/expiré).
+    let decodedToken: admin.auth.DecodedIdToken | undefined;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        decodedToken = await admin.auth().verifyIdToken(idToken);
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        const msg = (error as Error).message || '';
+        const transient =
+          /fetching public keys|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|timeout|403|ECONNREFUSED|fetch error/i.test(
+            msg,
+          );
+        if (!transient) break; // token invalide/expiré → inutile de retenter
+        // Exponential backoff: 200ms, 400ms, 800ms, 1600ms, 3200ms
+        await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
+      }
+    }
+    if (!decodedToken) {
+      // Diagnostic : le message Firebase précise la cause exacte (mismatch de
+      // FIREBASE_PROJECT_ID, ou "Error fetching public keys" = egress Google KO).
+      const configuredProject =
+        this.configService.get<string>('FIREBASE_PROJECT_ID');
+      this.logger.warn(
+        `[auth] verifyIdToken échoué (FIREBASE_PROJECT_ID=${configuredProject}): ${(lastError as Error)?.message}`,
+      );
       throw new UnauthorizedException('Invalid Firebase ID token');
     }
 
@@ -179,6 +219,9 @@ export class FirebaseAuthGuard implements CanActivate {
         await this.usersRepo.update(user.id, { externalId });
         user.externalId = externalId;
       } else if (user.externalId !== externalId) {
+        this.logger.warn(
+          `[auth] compte ${email} déjà lié à un autre uid (DB=${user.externalId}, token=${externalId})`,
+        );
         throw new UnauthorizedException(
           "Ce compte est déjà lié à un autre identifiant. Veuillez contacter votre administrateur.",
         );
@@ -186,6 +229,9 @@ export class FirebaseAuthGuard implements CanActivate {
     }
 
     if (!user) {
+      this.logger.warn(
+        `[auth] aucun compte trouvé (uid=${externalId}, email=${email ?? 'n/a'})`,
+      );
       throw new UnauthorizedException(
         'Aucun compte trouvé pour cet utilisateur. Veuillez contacter votre administrateur.',
       );

@@ -1,3 +1,4 @@
+import { setDefaultResultOrder } from 'node:dns';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
@@ -6,6 +7,11 @@ import helmet from 'helmet';
 import { corsOriginCallback } from './core/security/cors.config';
 import { AllExceptionsFilter } from './core/security/all-exceptions.filter';
 import { SupabaseStorageService } from './core/storage/supabase-storage.service';
+
+// Certains hébergeurs (IP partagées de PaaS) ont leur egress IPv6 bloqué par
+// Google → 403 "Error fetching public keys" sur googleapis.com, ce qui casse
+// la vérification des tokens Firebase. Forcer IPv4 fiabilise l'egress Google.
+setDefaultResultOrder('ipv4first');
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {

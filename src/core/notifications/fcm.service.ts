@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { In, Repository } from 'typeorm';
 import * as admin from 'firebase-admin';
+import * as https from 'https';
 import { FcmToken } from './fcm-token.entity';
 
 export interface FcmMessage {
@@ -32,7 +33,7 @@ export class FcmService {
   }
 
   private initializeFirebase() {
-    try { 
+    try {
       if (admin.apps.length > 0) {
         this.app = admin.apps[0]!;
         return;
@@ -48,12 +49,24 @@ export class FcmService {
         return;
       }
 
+      // Custom HTTP agent with better timeout and keep-alive settings
+      // to handle Render's egress issues with googleapis.com
+      const httpAgent = new https.Agent({
+        keepAlive: true,
+        keepAliveMsecs: 30000,
+        maxSockets: 5,
+        maxFreeSockets: 2,
+        timeout: 10000,
+        scheduling: 'fifo',
+      });
+
       this.app = admin.initializeApp({
         credential: admin.credential.cert({
           projectId,
           clientEmail,
           privateKey,
         }),
+        httpAgent,
       });
 
       this.logger.log('Firebase Admin SDK initialized successfully');
@@ -61,7 +74,7 @@ export class FcmService {
       this.logger.error('Failed to initialize Firebase Admin SDK', error);
     }
   }
- 
+
   async registerToken(
     userId: string,
     organizationId: string,
@@ -118,7 +131,7 @@ export class FcmService {
 
     return this.fcmTokenRepo.save(fcmToken);
   }
- 
+
   async getTokensForUser(userId: string): Promise<string[]> {
     const tokens = await this.fcmTokenRepo.find({
       where: { userId, isActive: true },
@@ -127,7 +140,7 @@ export class FcmService {
 
     return tokens.map(t => t.token);
   }
- 
+
   async getTokensForUsers(userIds: string[]): Promise<Map<string, string[]>> {
     const tokens = await this.fcmTokenRepo
       .createQueryBuilder('ft')
@@ -172,7 +185,7 @@ export class FcmService {
 
       // Si le token est invalide, le désactiver
       if (error.code === 'messaging/invalid-registration-token' ||
-          error.code === 'messaging/registration-token-not-registered') {
+        error.code === 'messaging/registration-token-not-registered') {
         await this.deactivateToken(message.token);
       }
 
@@ -213,7 +226,7 @@ export class FcmService {
         if (!resp.success) {
           const error = resp.error;
           if (error?.code === 'messaging/invalid-registration-token' ||
-              error?.code === 'messaging/registration-token-not-registered') {
+            error?.code === 'messaging/registration-token-not-registered') {
             invalidTokens.push(message.tokens[idx]);
           }
         }

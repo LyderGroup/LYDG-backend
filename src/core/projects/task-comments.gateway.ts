@@ -2,6 +2,7 @@ import { Logger, UnauthorizedException } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer, SubscribeMessage, ConnectedSocket, MessageBody } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import * as admin from 'firebase-admin';
+import * as https from 'https';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -57,12 +58,24 @@ export class TaskCommentsGateway {
 
     privateKey = privateKey.replace(/\\n/g, '\n');
 
+    // Custom HTTP agent with better timeout and keep-alive settings
+    // to handle Render's egress issues with googleapis.com
+    const httpAgent = new https.Agent({
+      keepAlive: true,
+      keepAliveMsecs: 30000,
+      maxSockets: 5,
+      maxFreeSockets: 2,
+      timeout: 10000,
+      scheduling: 'fifo',
+    });
+
     admin.initializeApp({
       credential: admin.credential.cert({
         projectId,
         clientEmail,
         privateKey,
       }),
+      httpAgent,
     });
   }
 
@@ -120,15 +133,15 @@ export class TaskCommentsGateway {
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     const userId = client.data.userId;
     const organizationId = client.data.organizationId;
- 
+
 
     if (!userId || !organizationId) {
-      
+
       return { ok: false, reason: 'unauthorized' };
     }
 
     await client.join(`user:${userId}:notifications`);
- 
+
     return { ok: true };
   }
 

@@ -37,7 +37,7 @@ function loadEnv(file) {
 
 const BACKEND_URL = (process.env.BACKEND_URL || env.BACKEND_URL || 'http://localhost:3000').replace(/\/$/, '');
 const ORG_CODE = process.env.ORG_CODE || env.ORG_CODE || 'LYDG-TG';
-const WEB_API_KEY = process.env.FIREBASE_WEB_API_KEY || env.FIREBASE_WEB_API_KEY || 'AIzaSyDS86GdGbx7f-4aRtcC3ViNGkF0zH9-Kq4';
+const WEB_API_KEY = process.env.FIREBASE_WEB_API_KEY || env.FIREBASE_WEB_API_KEY;
 const UID = 'e2e-session-status';
 const ROLE_CODE = 'E2E_SESSION_STATUS';
 const ACADEMY_PERMS = [

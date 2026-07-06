@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from '../users/user.entity';
 import { LoginHistory } from '../users/login-history.entity';
@@ -15,7 +15,7 @@ import { RbacModule } from '../rbac/rbac.module';
     // RbacModule expose PermissionGuard utilisé par UserDeviceController.
     // NotificationModule est @Global → InAppNotificationService et FcmService
     // sont disponibles automatiquement pour UserDeviceService.
-    RbacModule,
+    forwardRef(() => RbacModule),
   ],
   controllers: [UserDeviceController],
   providers: [FirebaseAuthGuard, UserDeviceService],

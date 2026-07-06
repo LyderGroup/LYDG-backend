@@ -1,11 +1,13 @@
-import { Controller, Get, Req, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { UserRole } from './user-role.entity';
 import { Organization } from '../organizations/organizations.entity';
 import { Employee } from '../hr/employee.entity';
+import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 
 @Controller('me')
+@UseGuards(FirebaseAuthGuard)
 export class MeController {
   constructor(
     @InjectRepository(UserRole)

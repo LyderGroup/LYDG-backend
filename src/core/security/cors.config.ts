@@ -7,7 +7,8 @@
  */
 
 const DEFAULT_ALLOWED_ORIGINS: readonly string[] = [
-  'http://localhost:5173',
+  'http://localhost:5173', 
+  'https://lydg-sooty.vercel.app',
   'http://localhost:3000',
 ];
 

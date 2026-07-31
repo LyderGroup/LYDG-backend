@@ -1,13 +1,15 @@
-import { Controller, Get, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Controller, Get, Req, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { UserRole } from './user-role.entity';
 import { Organization } from '../organizations/organizations.entity';
 import { Employee } from '../hr/employee.entity';
-import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 
+// Pas de @UseGuards(FirebaseAuthGuard) ici : le guard est déjà global
+// (APP_GUARD dans AppModule). L'ajouter le rejouerait sur chaque requête
+// /me/* → verifyIdToken() appelé deux fois, donc deux allers-retours vers
+// Google par requête.
 @Controller('me')
-@UseGuards(FirebaseAuthGuard)
 export class MeController {
   constructor(
     @InjectRepository(UserRole)
@@ -91,8 +93,17 @@ export class MeController {
     const orgCodeHeader = req.headers?.['x-organization-code'];
     const orgCode = Array.isArray(orgCodeHeader) ? orgCodeHeader[0] : orgCodeHeader;
 
+    // UPPER() pour rester cohérent avec TenantMiddleware : une comparaison
+    // exacte renvoyait organization:null si le client envoyait le code dans
+    // une autre casse (ex. "lydg-tg"), alors que toutes les autres routes
+    // fonctionnaient.
     const organization = orgCode
-      ? await this.organizationsRepo.findOne({ where: { nameCode: orgCode } })
+      ? await this.organizationsRepo
+          .createQueryBuilder('org')
+          .where('UPPER(org.nameCode) = :code', {
+            code: orgCode.trim().toUpperCase(),
+          })
+          .getOne()
       : null;
 
     const userRoles = await this.userRolesRepo

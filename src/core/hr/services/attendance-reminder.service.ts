@@ -6,6 +6,7 @@ import { Employee } from '../employee.entity';
 import { Organization } from '../../organizations/organizations.entity';
 import { InAppNotificationService } from '../../notifications/in-app-notification.service';
 import { FcmService } from '../../notifications/fcm.service';
+import { addDaysIso, toIsoDate } from '../../../common/utils/date.util';
 
 const DAY_CODES = [
   'sunday', 'monday', 'tuesday', 'wednesday',
@@ -162,11 +163,10 @@ export class AttendanceReminderService {
     organizationId: string,
   ): Promise<{ notified: number; skipped: number }> {
     const now = new Date();
-    const today = new Date(now);
-    today.setHours(0, 0, 0, 0);
-    const todayIso = today.toISOString().slice(0, 10); // YYYY-MM-DD
+    const todayIso = toIsoDate(now); // YYYY-MM-DD, en UTC
+    const today = new Date(`${todayIso}T00:00:00.000Z`);
 
-    const todayDayCode = DAY_CODES[now.getDay()];
+    const todayDayCode = DAY_CODES[now.getUTCDay()];
 
     const employees = await this.employeesRepo.find({
       where: { organizationId, employmentStatus: 'active' },
@@ -220,8 +220,10 @@ export class AttendanceReminderService {
     // Heure courante après workStartTime + 15 min ?
     const startTime = emp.workStartTime ?? DEFAULT_START_TIME;
     const [h, m] = startTime.split(':').map(Number);
+    // setUTCHours : `ctx.today` est minuit UTC et workStartTime est une heure
+    // murale du fuseau de l'organisation (Africa/Lome = UTC+0).
     const threshold = new Date(ctx.today);
-    threshold.setHours(h, m + LATE_GRACE_MINUTES, 0, 0);
+    threshold.setUTCHours(h, m + LATE_GRACE_MINUTES, 0, 0);
     if (ctx.now < threshold) return false;
 
     // Congé approuvé couvrant aujourd'hui ?
@@ -314,15 +316,10 @@ export class AttendanceReminderService {
     organizationId: string,
   ): Promise<{ notified: number; skipped: number }> {
     const now = new Date();
-    const today = new Date(now);
-    today.setHours(0, 0, 0, 0);
-    const toLocalIso = (d: Date): string => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${dd}`;
-    };
-    const todayIso = toLocalIso(today);
+    const todayIso = toIsoDate(now);
+    // Minuit UTC du jour courant : sert de base au calcul du seuil workEndTime
+    // et de borne pour la déduplication des notifications.
+    const today = new Date(`${todayIso}T00:00:00.000Z`);
 
     // Pointages du jour avec check-in mais sans check-out.
     const rows: Array<{
@@ -353,8 +350,10 @@ export class AttendanceReminderService {
       // Heure courante > workEndTime + 15 min ? Fallback 18:00.
       const endTime = r.work_end_time ?? '18:00';
       const [h, m] = endTime.split(':').map(Number);
+      // setUTCHours (et non setHours) : `today` est minuit UTC et work_end_time
+      // est une heure murale du fuseau de l'organisation (Africa/Lome = UTC+0).
       const threshold = new Date(today);
-      threshold.setHours(h, m + LATE_GRACE_MINUTES, 0, 0);
+      threshold.setUTCHours(h, m + LATE_GRACE_MINUTES, 0, 0);
       if (now < threshold) { skipped++; continue; }
 
       // Déjà notifié aujourd'hui ?
@@ -420,18 +419,10 @@ export class AttendanceReminderService {
     organizationId: string,
   ): Promise<{ notified: number; skipped: number }> {
     const now = new Date();
-    const today = new Date(now);
-    today.setHours(0, 0, 0, 0);
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const toLocalIso = (d: Date): string => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${dd}`;
-    };
-    const yesterdayIso = toLocalIso(yesterday);
-    const yesterdayDayCode = DAY_CODES[yesterday.getDay()].slice(0, 3);
+    const today = new Date(`${toIsoDate(now)}T00:00:00.000Z`);
+    const yesterdayIso = addDaysIso(now, -1);
+    const yesterday = new Date(`${yesterdayIso}T00:00:00.000Z`);
+    const yesterdayDayCode = DAY_CODES[yesterday.getUTCDay()].slice(0, 3);
 
     // 1. Récupère tous les employés actifs, leur user_id et workDays.
     const employees = await this.employeesRepo.find({

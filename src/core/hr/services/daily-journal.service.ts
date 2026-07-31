@@ -6,6 +6,7 @@ import { Employee } from '../employee.entity';
 import { HrRealtimeService } from '../hr-realtime.service';
 import { InAppNotificationService } from '../../notifications/in-app-notification.service';
 import { FcmService } from '../../notifications/fcm.service';
+import { toIsoDate } from '../../../common/utils/date.util';
 
 interface SubmitJournalInput {
   employeeId: string;
@@ -254,10 +255,11 @@ export class DailyJournalService {
 
     if (!options?.all) {
       // Mode filtré par date (défaut). On compare en YYYY-MM-DD car
-      // journal_date est un type DATE — évite les soucis de fuseau.
-      const target = options?.date ? new Date(options.date) : new Date();
-      target.setHours(0, 0, 0, 0);
-      const dateStr = target.toISOString().slice(0, 10);
+      // journal_date est un type DATE. toIsoDate() reste en UTC de bout en
+      // bout : l'ancien `setHours(0,0,0,0)` (heure locale) suivi de
+      // `toISOString()` (UTC) renvoyait la date de la VEILLE sur tout hôte en
+      // UTC+n — donc le journal du mauvais jour.
+      const dateStr = toIsoDate(options?.date);
       qb.andWhere('dj.journal_date = :dateStr', { dateStr });
     } else {
       // Mode "tout afficher" : plafond pour ne pas charger trop de lignes.

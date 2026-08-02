@@ -508,44 +508,63 @@ export class WorkflowValidationService {
   async getPendingValidationRequests(
     ctx: ValidationContext,
   ): Promise<ValidationRequest[]> {
-    // Get project IDs where user is a manager or owner
-    const managerMemberships = await this.memberRepo.find({
-      where: [
-        { userId: ctx.userId, roleInProject: 'MANAGER' },
-        { userId: ctx.userId, roleInProject: 'OWNER' },
-      ],
-    });
+    const perms = ctx.userPermissions ?? [];
 
-    const projectIds = managerMemberships.map((m) => m.projectId);
- 
-    const ownedProjects = await this.dataSource.query(
-      `SELECT DISTINCT p.id
-       FROM module_b_projects.projects p
-       WHERE p.organization_id = $1
-         AND (p.created_by = $2 OR p.manager_id = $2)`,
-      [ctx.organizationId, ctx.userId],
-    ) as Array<{ id: string }>;
+    // La portée de la permission prime sur l'appartenance au projet.
+    //
+    // Auparavant ce filtre ne regardait QUE les adhésions MANAGER/OWNER et la
+    // propriété du projet : un utilisateur à qui l'on avait accordé
+    // `projects.task.validate.tenant` franchissait le guard du contrôleur puis
+    // recevait une liste vide, sans erreur — d'où « les demandes de validation
+    // ne s'affichent plus ». Un scope tenant/global doit voir toute
+    // l'organisation.
+    const hasOrgWideScope =
+      perms.includes(PROJECT_PERMISSIONS.TASK.VALIDATE.TENANT) ||
+      perms.includes(PROJECT_PERMISSIONS.TASK.VALIDATE.GLOBAL);
 
-    const allProjectIds = new Set([
-      ...projectIds,
-      ...ownedProjects.map((p) => p.id),
-    ]);
-
-    if (allProjectIds.size === 0) {
-      return [];
-    }
-
-    return this.validationRequestRepo
+    const query = this.validationRequestRepo
       .createQueryBuilder('vr')
       .innerJoinAndSelect('vr.task', 't')
       .innerJoinAndSelect('t.project', 'p')
       .innerJoinAndSelect('vr.step', 's')
       .innerJoinAndSelect('vr.requester', 'u')
-      .where('vr.projectId IN (:...projectIds)', { projectIds: Array.from(allProjectIds) })
-      .andWhere('vr.organizationId = :orgId', { orgId: ctx.organizationId })
+      .where('vr.organizationId = :orgId', { orgId: ctx.organizationId })
       .andWhere('vr.status = :status', { status: 'pending' })
-      .orderBy('vr.createdAt', 'ASC')
-      .getMany();
+      .orderBy('vr.createdAt', 'ASC');
+
+    if (!hasOrgWideScope) {
+      // Portée restreinte : on retombe sur les projets que l'utilisateur
+      // pilote effectivement.
+      const managerMemberships = await this.memberRepo.find({
+        where: [
+          { userId: ctx.userId, roleInProject: 'MANAGER' },
+          { userId: ctx.userId, roleInProject: 'OWNER' },
+        ],
+      });
+
+      const ownedProjects = (await this.dataSource.query(
+        `SELECT DISTINCT p.id
+         FROM module_b_projects.projects p
+         WHERE p.organization_id = $1
+           AND (p.created_by = $2 OR p.manager_id = $2)`,
+        [ctx.organizationId, ctx.userId],
+      )) as Array<{ id: string }>;
+
+      const allProjectIds = new Set([
+        ...managerMemberships.map((m) => m.projectId),
+        ...ownedProjects.map((p) => p.id),
+      ]);
+
+      if (allProjectIds.size === 0) {
+        return [];
+      }
+
+      query.andWhere('vr.projectId IN (:...projectIds)', {
+        projectIds: Array.from(allProjectIds),
+      });
+    }
+
+    return query.getMany();
   }
 
   /**

@@ -59,20 +59,43 @@ export class MigrationsService implements OnApplicationBootstrap {
       for (const file of files) {
         const filePath = path.join(migrationsDir, file);
         const sql = fs.readFileSync(filePath, 'utf8');
-
-        try {
-          console.log(`[Migrations] Exécution de ${file}...`);
-          await this.dataSource.query(sql);
-          console.log(`[Migrations] ${file} exécuté avec succès`);
-        } catch (error) {
-          // Ignorer les erreurs "déjà existant"
-          if (error.message.includes('already exists') || error.message.includes('duplicate')) {
-            console.log(`[Migrations] ${file} déjà appliqué`);
-          } else {
-            console.log(`[Migrations] ${file} erreur: ${error.message}`);
-          }
-        }
+        await this.runOneFile(file, sql);
       }
+    }
+  }
+ 
+  private async runOneFile(file: string, sql: string): Promise<void> {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+
+    try {
+      console.log(`[Migrations] Exécution de ${file}...`);
+      await runner.query(sql);
+      console.log(`[Migrations] ${file} exécuté avec succès`);
+    } catch (error) {
+      const message = (error as Error).message ?? String(error);
+
+      // Le filtre d'origine ne reconnaissait que les messages ANGLAIS. Sur une
+      // base en français (« existe déjà »), un « déjà appliqué » parfaitement
+      // bénin était journalisé comme une erreur.
+      const alreadyApplied =
+        /already exists|duplicate|existe déjà|doublon/i.test(message);
+
+      if (alreadyApplied) {
+        console.log(`[Migrations] ${file} déjà appliqué`);
+      } else {
+        console.log(`[Migrations] ${file} erreur: ${message}`);
+      }
+
+      // LE POINT CRITIQUE : sortir de la transaction abortée avant de rendre
+      // la connexion. Hors transaction, ROLLBACK n'est qu'un avertissement.
+      try {
+        await runner.query('ROLLBACK');
+      } catch {
+        /* rien à annuler */
+      }
+    } finally {
+      await runner.release();
     }
   }
 }

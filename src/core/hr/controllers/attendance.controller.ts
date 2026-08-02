@@ -15,6 +15,7 @@ import { AttendanceReminderService } from '../services/attendance-reminder.servi
 import { PermissionGuard } from '../../rbac/permission.guard';
 import { RequirePermission } from '../../rbac/require-permission.decorator';
 import { HR_PERMISSIONS } from '../hr.permissions';
+import { ProjectsService } from '../../projects/projects.service';
 
 @Controller('core/hr/attendance')
 @UseGuards(PermissionGuard)
@@ -22,6 +23,7 @@ export class AttendanceController {
   constructor(
     private readonly attendanceService: AttendanceService,
     private readonly attendanceReminderService: AttendanceReminderService,
+    private readonly projectsService: ProjectsService,
   ) { }
   @Post('debug/run-reminders')
   @RequirePermission(HR_PERMISSIONS.HR_ATTENDANCE_MANAGE, { moduleCode: 'module_c_rh' })
@@ -56,11 +58,50 @@ export class AttendanceController {
     });
   }
 
+  /**
+   * Tâches que l'employé peut cocher comme terminées avant de pointer son
+   * départ. Self-service : pas de permission au-delà de l'authentification,
+   * la requête est bornée à ses propres tâches.
+   */
+  @Get('my/pending-tasks')
+  async myPendingTasks(@Req() req: any) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const organizationId = tenant?.id ?? req.user.organizationId;
+    if (!req.user?.id) {
+      throw new ForbiddenException('Utilisateur non authentifié');
+    }
+    return this.projectsService.listTasksPendingCompletionForUser({
+      userId: String(req.user.id),
+      organizationId,
+    });
+  }
+
   @Post('check-out')
   async checkOut(
-    @Body() body: { attendanceId: string },
+    @Req() req: any,
+    @Body() body: {
+      attendanceId: string;
+      completedTaskIds?: string[];
+      latitude?: number;
+      longitude?: number;
+      offSiteLocation?: string;
+      offSiteReason?: string;
+    },
   ) {
-    return this.attendanceService.checkOut(body);
+    const tenant = req.tenant as { id?: string } | undefined;
+    return this.attendanceService.checkOut({
+      attendanceId: body.attendanceId,
+      completedTaskIds: body.completedTaskIds,
+      latitude: body.latitude,
+      longitude: body.longitude,
+      offSiteLocation: body.offSiteLocation,
+      offSiteReason: body.offSiteReason,
+      // Contexte transmis pour faire avancer les tâches AU NOM de l'employé :
+      // moveTaskToNextWorkflowStep revérifie ses droits sur chaque tâche.
+      userId: req.user?.id ? String(req.user.id) : undefined,
+      contextOrganizationId: tenant?.id ?? req.user?.organizationId,
+      permissionCodes: (req.permissionCodes as string[] | undefined) ?? [],
+    });
   }
 
   /**

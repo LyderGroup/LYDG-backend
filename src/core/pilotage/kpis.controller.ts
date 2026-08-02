@@ -14,38 +14,7 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { PILOTAGE_MODULE_CODE, PILOTAGE_PERMISSIONS } from './pilotage.permissions';
 import { PilotageService } from './pilotage.service';
-
-class CreateKpiDto {
-  code!: string;
-  name!: string;
-  description?: string | null;
-  objectiveId?: string | null;
-  frequency?: string | null;
-  unit?: string | null;
-  direction?: string | null;
-  targetValue?: string | number | null;
-  warningThreshold?: string | number | null;
-  criticalThreshold?: string | number | null;
-  isActive?: boolean;
-  isVisibleDashboard?: boolean;
-  displayOrder?: number;
-}
-
-class UpdateKpiDto {
-  code?: string;
-  name?: string;
-  description?: string | null;
-  objectiveId?: string | null;
-  frequency?: string | null;
-  unit?: string | null;
-  direction?: string | null;
-  targetValue?: string | number | null;
-  warningThreshold?: string | number | null;
-  criticalThreshold?: string | number | null;
-  isActive?: boolean;
-  isVisibleDashboard?: boolean;
-  displayOrder?: number;
-}
+import { CreateKpiDto, UpdateKpiDto } from './dto/pilotage.dto';
 
 @UseGuards(PermissionGuard)
 @Controller('core/pilotage/kpis')

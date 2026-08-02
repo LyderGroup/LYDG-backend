@@ -151,10 +151,14 @@ import { NotificationModule } from '../notifications/notification.module';
 import { UsersModule } from '../users/users.module';
 import { LoginHistory } from '../users/login-history.entity';
 import { UserRole } from '../rbac/user-role.entity';
+import { ProjectsModule } from '../projects/projects.module';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    // Le pointage de départ fait avancer les tâches cochées dans leur
+    // workflow (ProjectsService) avant de pré-remplir le rapport journalier.
+    ProjectsModule,
     AuthModule,
     NotificationModule,
     UsersModule,

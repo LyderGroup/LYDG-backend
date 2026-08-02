@@ -199,6 +199,10 @@ export class EmployeeProfileService {
     total: number;
     sections: Record<string, number>;
   } {
+    /** Un champ compte comme rempli s'il n'est ni nul, ni vide après trim. */
+    const isFilled = (v: unknown): boolean =>
+      v !== null && v !== undefined && String(v).trim() !== '';
+
     const sections: Record<string, number> = {};
 
     // Section 1: Informations personnelles (20 points)
@@ -237,16 +241,20 @@ export class EmployeeProfileService {
     sections['emergency'] = Math.round((emergencyFilled / emergencyFields.length) * 15);
 
     // Section 4: Informations médicales (15 points)
+    // `bloodGroup` est une CHAÎNE : le filtre `f === true` d'origine ne la
+    // comptait jamais, plafonnant la section à la moitié de ses points même
+    // entièrement remplie. On teste donc chaque critère en booléen explicite.
     const medicalFields = [
-      profile.bloodGroup,
+      isFilled(profile.bloodGroup),
       profile.chronicDiseases !== null || profile.allergies !== null,
     ];
     const medicalFilled = medicalFields.filter((f) => f === true).length;
     sections['medical'] = Math.round((medicalFilled / medicalFields.length) * 15);
 
     // Section 5: Informations logistiques (10 points)
+    // Même correction que la section médicale : `transportMode` est une chaîne.
     const logisticsFields = [
-      profile.transportMode,
+      isFilled(profile.transportMode),
       profile.hasPersonalVehicle !== null,
       profile.availableForTravel !== null,
     ];

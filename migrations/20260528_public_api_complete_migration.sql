@@ -24,8 +24,15 @@ ALTER TABLE module_c_rh.job_openings
 ADD COLUMN IF NOT EXISTS visibility_state VARCHAR(30) DEFAULT 'draft';
 
 -- Create constraint for valid visibility states
+-- IDEMPOTENCE : ADD CONSTRAINT n'accepte pas IF NOT EXISTS. Sans le DROP
+-- préalable, ce fichier échouait dès le 2e démarrage (« la contrainte
+-- check_visibility_state existe déjà »), ce qui abortait la transaction et
+-- faisait échouer en cascade les 31 migrations suivantes.
 ALTER TABLE module_c_rh.job_openings
-ADD CONSTRAINT check_visibility_state 
+DROP CONSTRAINT IF EXISTS check_visibility_state;
+
+ALTER TABLE module_c_rh.job_openings
+ADD CONSTRAINT check_visibility_state
   CHECK (visibility_state IN ('draft', 'internal_review', 'published', 'archived'));
 
 -- ───────────────────────────────────────────────────────────────────────────

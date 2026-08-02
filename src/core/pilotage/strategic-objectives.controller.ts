@@ -14,40 +14,7 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { PILOTAGE_MODULE_CODE, PILOTAGE_PERMISSIONS } from './pilotage.permissions';
 import { PilotageService } from './pilotage.service';
-
-class CreateStrategicObjectiveDto {
-  title!: string;
-  description?: string | null;
-  objectiveType?: string | null;
-  periodType?: string | null;
-  year!: number;
-  quarter?: number | null;
-  startDate!: string;
-  endDate!: string;
-  targetValue?: string | number | null;
-  currentValue?: string | number | null;
-  unit?: string | null;
-  status?: string | null;
-  ownerId?: string | null;
-  parentObjectiveId?: string | null;
-}
-
-class UpdateStrategicObjectiveDto {
-  title?: string;
-  description?: string | null;
-  objectiveType?: string | null;
-  periodType?: string | null;
-  year?: number;
-  quarter?: number | null;
-  startDate?: string;
-  endDate?: string;
-  targetValue?: string | number | null;
-  currentValue?: string | number | null;
-  unit?: string | null;
-  status?: string | null;
-  ownerId?: string | null;
-  parentObjectiveId?: string | null;
-}
+import { CreateStrategicObjectiveDto, UpdateStrategicObjectiveDto } from './dto/pilotage.dto';
 
 @UseGuards(PermissionGuard)
 @Controller('core/pilotage/strategic-objectives')

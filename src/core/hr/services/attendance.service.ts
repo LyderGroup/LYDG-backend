@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, Between, IsNull } from 'typeorm';
 import { OfficeAttendance, AttendanceStatus } from '../entities/office-attendance.entity';
@@ -6,6 +6,9 @@ import { Employee } from '../employee.entity';
 import { GeofenceService } from './geofence.service';
 import { AutomaticSanctionService } from './automatic-sanction.service';
 import { HrRealtimeService } from '../hr-realtime.service';
+import { ProjectsService } from '../../projects/projects.service';
+import { DailyJournalService, type JournalTaskLine } from './daily-journal.service';
+import { toIsoDate } from '../../../common/utils/date.util';
 
 export interface CheckInInput {
   employeeId: string;
@@ -20,6 +23,27 @@ export interface CheckInInput {
 
 export interface CheckOutInput {
   attendanceId: string;
+  /**
+   * Tâches que l'employé déclare terminées en pointant son départ.
+   * Elles avancent dans LEUR workflow (donc passent en revue si le projet
+   * l'exige, plutôt que d'être closes autoritairement) puis alimentent le
+   * brouillon du rapport journalier.
+   */
+  completedTaskIds?: string[];
+  /** Contexte nécessaire pour faire avancer les tâches au nom de l'employé. */
+  userId?: string;
+  contextOrganizationId?: string;
+  permissionCodes?: string[];
+  /**
+   * Position au moment du départ. Être hors zone n'empêche PAS de pointer :
+   * on enregistre simplement le lieu et le motif, comme à l'arrivée. Bloquer
+   * quelqu'un qui termine sa journée en clientèle ou en télétravail revient à
+   * lui faire perdre ses heures.
+   */
+  latitude?: number;
+  longitude?: number;
+  offSiteLocation?: string;
+  offSiteReason?: string;
 }
 
 export interface JustifyAbsenceInput {
@@ -42,7 +66,11 @@ export class AttendanceService {
     @Inject(forwardRef(() => AutomaticSanctionService))
     private readonly sanctionService: AutomaticSanctionService,
     private readonly realtime: HrRealtimeService,
+    private readonly projectsService: ProjectsService,
+    private readonly dailyJournalService: DailyJournalService,
   ) { }
+
+  private readonly logger = new Logger(AttendanceService.name);
 
   async checkIn(
     organizationId: string,
@@ -82,7 +110,15 @@ export class AttendanceService {
     const scheduled = this.timeToMinutes(defaultCheckIn);
     const actual = this.timeToMinutes(currentTime);
 
-    if (actual > scheduled) {
+    // Un pointage effectué un jour NON travaillé ne peut pas être « en
+    // retard » : il n'y a pas d'heure d'arrivée attendue ce jour-là. On se
+    // contente d'enregistrer la présence et les heures effectuées, sans
+    // déclencher les vérifications disciplinaires.
+    const worksToday = this.isWorkDay(employee?.workDays, now);
+
+    if (!worksToday) {
+      status = 'present';
+    } else if (actual > scheduled) {
       status = 'late';
     } else {
       status = 'present';
@@ -93,15 +129,18 @@ export class AttendanceService {
       existing.scheduledCheckIn = defaultCheckIn;
       existing.scheduledCheckOut = defaultCheckOut;
       existing.scheduledHours = defaultHours;
-      // Si l'employé était marqué absent, il est maintenant en retard
-      if (existing.status === 'absent') {
+      // Si l'employé était marqué absent, il est maintenant en retard —
+      // sauf hors jour de travail, où « absent » n'a pas de sens non plus.
+      if (existing.status === 'absent' && worksToday) {
         existing.status = 'late';
       } else {
         existing.status = status;
       }
       const saved = await this.attendanceRepo.save(existing);
       this.emitCheckInRealtime(saved, employee);
-      this.triggerDisciplineChecksIfLate(saved);
+      if (worksToday) {
+        this.triggerDisciplineChecksIfLate(saved);
+      }
       return saved;
     }
 
@@ -139,7 +178,9 @@ export class AttendanceService {
 
     const saved = await this.attendanceRepo.save(attendance);
     this.emitCheckInRealtime(saved, employee);
-    this.triggerDisciplineChecksIfLate(saved);
+    if (worksToday) {
+      this.triggerDisciplineChecksIfLate(saved);
+    }
     return saved;
   }
 
@@ -203,6 +244,32 @@ export class AttendanceService {
 
     attendance.actualCheckOut = currentTime;
 
+    // Position de sortie : enregistrée pour la traçabilité RH, jamais
+    // bloquante. Si l'employé est hors zone, on conserve le lieu et le motif
+    // qu'il déclare ; c'est au RH d'apprécier, pas au système de refuser.
+    if (input.latitude !== undefined && input.longitude !== undefined) {
+      attendance.checkOutLatitude = input.latitude;
+      attendance.checkOutLongitude = input.longitude;
+
+      try {
+        const check = await this.geofenceService.checkLocation(attendance.organizationId, {
+          latitude: input.latitude,
+          longitude: input.longitude,
+        });
+        if (!check.isInZone) {
+          // On n'écrase pas une éventuelle justification d'arrivée : on
+          // complète seulement si le départ en fournit une.
+          if (input.offSiteLocation) attendance.offSiteLocation = input.offSiteLocation;
+          if (input.offSiteReason) attendance.offSiteReason = input.offSiteReason;
+        }
+      } catch {
+        // Géofence indisponible : on garde les coordonnées et on continue.
+      }
+    } else {
+      if (input.offSiteLocation) attendance.offSiteLocation = input.offSiteLocation;
+      if (input.offSiteReason) attendance.offSiteReason = input.offSiteReason;
+    }
+
     const checkInMinutes = this.timeToMinutes(attendance.actualCheckIn);
     const checkOutMinutes = this.timeToMinutes(currentTime);
     const workedMinutes = checkOutMinutes - checkInMinutes;
@@ -235,9 +302,66 @@ export class AttendanceService {
       // best-effort
     }
 
+    // Tâches déclarées terminées → avancement du workflow + brouillon de
+    // rapport. Entièrement best-effort : on ne bloque JAMAIS un départ parce
+    // qu'une tâche ou un journal a échoué.
+    await this.applyCompletedTasksOnCheckOut(saved, input);
+
     return saved;
   }
 
+  /**
+   * Fait avancer les tâches cochées dans leur workflow, puis pré-remplit le
+   * rapport journalier avec le résultat.
+   *
+   * On réutilise `moveTaskToNextWorkflowStep` du module Projets plutôt que
+   * d'écrire `status = 'completed'` : une tâche dont l'étape suivante exige
+   * une validation part en revue et notifie l'approbateur. Court-circuiter ce
+   * chemin retirerait aux managers la main sur la clôture.
+   */
+  private async applyCompletedTasksOnCheckOut(
+    attendance: OfficeAttendance,
+    input: CheckOutInput,
+  ): Promise<void> {
+    const taskIds = (input.completedTaskIds ?? []).filter(Boolean);
+    if (taskIds.length === 0) return;
+    if (!input.userId || !input.contextOrganizationId) return;
+
+    const lines: JournalTaskLine[] = [];
+
+    for (const taskId of taskIds) {
+      try {
+        const result = await this.projectsService.moveTaskToNextWorkflowStep({
+          taskId,
+          userId: input.userId,
+          contextOrganizationId: input.contextOrganizationId,
+          permissionCodes: input.permissionCodes ?? [],
+        });
+
+        const task = await this.projectsService.getTaskSummaryForJournal(taskId);
+        lines.push({
+          title: task?.title ?? 'Tâche',
+          projectName: task?.projectName ?? null,
+          isFinal: !!result.isFinalStep,
+          stepName: result.toStepName ?? null,
+        });
+      } catch (err) {
+        // Une tâche refusée (droits, étape finale déjà atteinte…) ne doit pas
+        // empêcher les autres d'avancer ni bloquer le pointage.
+        this.logger.warn(
+          `Tâche ${taskId} non avancée au pointage de départ : ${(err as Error).message}`,
+        );
+      }
+    }
+
+    if (lines.length === 0) return;
+
+    await this.dailyJournalService.prefillFromCompletedTasks({
+      employeeId: attendance.employeeId,
+      date: toIsoDate(attendance.attendanceDate),
+      tasks: lines,
+    });
+  }
 
   async justifyAbsence(
     organizationId: string,
@@ -680,6 +804,31 @@ export class AttendanceService {
   private timeToMinutes(time: string): number {
     const [hours, minutes] = time.split(':').map(Number);
     return hours * 60 + minutes;
+  }
+
+  /**
+   * L'employé travaille-t-il ce jour-là ?
+   *
+   * `work_days` est stocké en codes de 3 lettres (« mon,tue,wed,thu,fri »).
+   * Quand la colonne est vide ou nulle, aucun planning n'a été défini : on
+   * considère alors tous les jours comme travaillés, ce qui préserve le
+   * comportement historique des employés sans horaire.
+   *
+   * Note : on lit le jour en heure locale du process, comme le reste de
+   * `checkIn` qui calcule `currentTime` avec getHours(). Le serveur tourne en
+   * UTC et les organisations sont en Africa/Lome (UTC+0), donc les deux
+   * coïncident ; les garder sur la même base évite une incohérence interne.
+   */
+  private isWorkDay(workDays: string[] | null | undefined, date: Date): boolean {
+    const codes = (workDays ?? [])
+      .map((d) => String(d).trim().toLowerCase())
+      .filter((d) => d.length > 0);
+    if (codes.length === 0) return true;
+
+    const DAY_CODES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const today = DAY_CODES[date.getDay()];
+    // Tolère les deux notations rencontrées en base : « mon » et « monday ».
+    return codes.some((d) => d === today || d.startsWith(today));
   }
 
   // ────────── BIS-2 ──────────

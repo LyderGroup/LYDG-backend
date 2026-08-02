@@ -26,6 +26,19 @@ interface ReviewJournalInput {
   feedback?: string;
 }
 
+/** Une tâche déclarée terminée au moment du pointage de départ. */
+export interface JournalTaskLine {
+  title: string;
+  projectName: string | null;
+  /** Vrai si le workflow l'a réellement close ; sinon elle attend validation. */
+  isFinal: boolean;
+  stepName: string | null;
+}
+
+/** Marqueur délimitant le bloc généré, pour pouvoir le régénérer sans
+ *  toucher à ce que l'employé a écrit lui-même. */
+const GENERATED_HEADER = '— Tâches déclarées terminées —';
+
 @Injectable()
 export class DailyJournalService {
   private readonly logger = new Logger(DailyJournalService.name);
@@ -39,6 +52,85 @@ export class DailyJournalService {
     private readonly inApp: InAppNotificationService,
     private readonly fcm: FcmService,
   ) { }
+
+  /**
+   * Pré-remplit le journal du jour à partir des tâches cochées au pointage de
+   * départ.
+   *
+   * Trois règles délibérées :
+   *  - le journal reste un BROUILLON (`isSubmitted` inchangé) : c'est
+   *    l'employé qui valide, sinon le rapport perd sa valeur RH ;
+   *  - le texte saisi à la main n'est JAMAIS écrasé — le bloc généré est
+   *    délimité par un marqueur et seul ce bloc est régénéré ;
+   *  - aucune exception ne remonte : l'appelant est le pointage de départ,
+   *    qui doit aboutir même si le journal échoue.
+   */
+  async prefillFromCompletedTasks(input: {
+    employeeId: string;
+    date: string; // YYYY-MM-DD
+    tasks: JournalTaskLine[];
+  }): Promise<DailyJournal | null> {
+    if (input.tasks.length === 0) return null;
+
+    try {
+      const journalDate = new Date(`${input.date}T00:00:00.000Z`);
+
+      const byProject = new Map<string, JournalTaskLine[]>();
+      for (const t of input.tasks) {
+        const key = t.projectName ?? 'Sans projet';
+        if (!byProject.has(key)) byProject.set(key, []);
+        byProject.get(key)!.push(t);
+      }
+
+      const lines: string[] = [GENERATED_HEADER];
+      for (const [project, tasks] of byProject) {
+        lines.push(`${project} :`);
+        for (const t of tasks) {
+          // On distingue explicitement « clôturée » de « en attente de
+          // validation » : le manager doit savoir ce qui reste à approuver.
+          const suffix = t.isFinal
+            ? ''
+            : ` (en attente de validation${t.stepName ? ` — ${t.stepName}` : ''})`;
+          lines.push(`  - ${t.title}${suffix}`);
+        }
+      }
+      const generated = lines.join('\n');
+
+      let journal = await this.repo.findOne({
+        where: { employeeId: input.employeeId, journalDate },
+      });
+
+      if (!journal) {
+        journal = this.repo.create({
+          employeeId: input.employeeId,
+          journalDate,
+          accomplishments: generated,
+          isSubmitted: false,
+        });
+        return await this.repo.save(journal);
+      }
+
+      // Journal déjà soumis : on n'y touche plus.
+      if (journal.isSubmitted) return journal;
+
+      const existing = journal.accomplishments ?? '';
+      const markerIndex = existing.indexOf(GENERATED_HEADER);
+      journal.accomplishments =
+        markerIndex >= 0
+          ? // Remplace uniquement l'ancien bloc généré (il est en fin de texte).
+            `${existing.slice(0, markerIndex).trimEnd()}\n\n${generated}`.trim()
+          : existing.trim()
+            ? `${existing.trim()}\n\n${generated}`
+            : generated;
+
+      return await this.repo.save(journal);
+    } catch (err) {
+      this.logger.warn(
+        `Pré-remplissage du journal impossible (employé ${input.employeeId}) : ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
 
   async submitJournal(input: SubmitJournalInput): Promise<DailyJournal> {
     const today = new Date();

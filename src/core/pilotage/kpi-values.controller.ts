@@ -13,16 +13,7 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { PILOTAGE_MODULE_CODE, PILOTAGE_PERMISSIONS } from './pilotage.permissions';
 import { PilotageService } from './pilotage.service';
-
-class CreateKpiValueDto {
-  kpiId!: string;
-  periodStart!: string;
-  periodEnd!: string;
-  periodType?: string | null;
-  value!: string | number;
-  targetValue?: string | number | null;
-  notes?: string | null;
-}
+import { CreateKpiValueDto } from './dto/pilotage.dto';
 
 @UseGuards(PermissionGuard)
 @Controller('core/pilotage/kpi-values')

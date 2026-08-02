@@ -284,7 +284,9 @@ export class ProjectsService {
 
     const rows = await this.projectCommentsRepo
       .createQueryBuilder('c')
-      .leftJoin('c.user', 'u')
+      .leftJoinAndSelect('c.user', 'u') // AndSelect : sans lui la relation n'est
+      // pas hydratée, `c.user` reste undefined et l'auteur s'affiche
+      // « Utilisateur » côté frontend.
       .where('c.project_id = :projectId', { projectId: input.projectId })
       .orderBy('c.createdAt', 'ASC')
       .take(500)
@@ -768,6 +770,57 @@ export class ProjectsService {
       isFinalStep: next.isFinalStep,
       status: statusPatch ?? task.status,
     };
+  }
+
+  /**
+   * Tâches que l'employé peut déclarer terminées au moment de pointer son
+   * départ : celles qui lui sont assignées et qui ne sont pas déjà closes.
+   *
+   * On ne filtre PAS sur « modifiée aujourd'hui » : une tâche commencée hier
+   * et finie aujourd'hui doit rester cochable.
+   */
+  async listTasksPendingCompletionForUser(input: {
+    userId: string;
+    organizationId: string;
+  }): Promise<Array<{ id: string; title: string; projectName: string | null; status: string | null; progress: number | null }>> {
+    return (await this.tasksRepo.manager.query(
+      `
+      SELECT t.id, t.title, t.status, t.progress, p.name AS "projectName"
+        FROM module_b_projects.tasks t
+        LEFT JOIN module_b_projects.projects p ON p.id = t.project_id
+       WHERE t.assignee_id = $1
+         AND t.organization_id = $2
+         AND t.deleted_at IS NULL
+         AND (t.status IS NULL OR t.status NOT IN ('completed', 'approved', 'cancelled'))
+       ORDER BY p.name NULLS LAST, t.due_date NULLS LAST, t.title
+       LIMIT 100
+      `,
+      [input.userId, input.organizationId],
+    )) as Array<{ id: string; title: string; projectName: string | null; status: string | null; progress: number | null }>;
+  }
+
+  /**
+   * Titre de la tâche + nom de son projet, pour composer le rapport
+   * journalier. Volontairement sans contrôle de permission : l'appelant
+   * (pointage de départ) vient de faire avancer cette tâche via
+   * `moveTaskToNextWorkflowStep`, qui a déjà vérifié les droits.
+   */
+  async getTaskSummaryForJournal(
+    taskId: string,
+  ): Promise<{ title: string; projectName: string | null } | null> {
+    const rows: Array<{ title: string; project_name: string | null }> =
+      await this.tasksRepo.manager.query(
+        `
+        SELECT t.title, p.name AS project_name
+          FROM module_b_projects.tasks t
+          LEFT JOIN module_b_projects.projects p ON p.id = t.project_id
+         WHERE t.id = $1
+         LIMIT 1
+        `,
+        [taskId],
+      );
+    if (!rows[0]) return null;
+    return { title: rows[0].title, projectName: rows[0].project_name ?? null };
   }
 
   async getTaskWorkflowState(input: {
@@ -1548,7 +1601,9 @@ export class ProjectsService {
     const rows = await this.taskCommentsRepo
       .createQueryBuilder('c')
       .leftJoin(Task, 't', 't.id = c.task_id')
-      .leftJoin('c.user', 'u')
+      .leftJoinAndSelect('c.user', 'u') // AndSelect : sans lui la relation n'est
+      // pas hydratée, `c.user` reste undefined et l'auteur s'affiche
+      // « Utilisateur » côté frontend.
       .where('c.task_id = :taskId', { taskId: input.taskId })
       .orderBy('c.createdAt', 'ASC')
       .getMany();

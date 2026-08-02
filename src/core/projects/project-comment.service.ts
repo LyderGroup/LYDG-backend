@@ -71,7 +71,9 @@ export class ProjectCommentService {
 
     const withUser = await this.projectCommentsRepo
       .createQueryBuilder('c')
-      .leftJoin('c.user', 'u')
+      .leftJoinAndSelect('c.user', 'u') // AndSelect : sans lui la relation n'est
+      // pas hydratée, `c.user` reste undefined et l'auteur s'affiche
+      // « Utilisateur » côté frontend.
       .where('c.id = :id', { id: saved.id })
       .getOne();
 

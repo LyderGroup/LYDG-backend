@@ -262,12 +262,6 @@ export class PublicCareersService {
       trackingUrl: `${this.canonicalBaseUrl}/emploi/track/${saved.id}`,
     };
   }
-
-  // ─── 4. Publication interne (côté ERP) ─────────────────────────────────────
-  /**
-   * Bascule un job en visibility_state='published' et génère le slug.
-   * Appelé par l'API interne lors d'un publish RH.
-   */
   async publishJobOpening(
     organizationId: string,
     jobOpeningId: string,

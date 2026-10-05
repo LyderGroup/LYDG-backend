@@ -16,6 +16,10 @@ interface CreateEmployeeInput {
   managerId?: string | null;
   hrManagerId?: string | null;
   referralEmployeeId?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
   employeeNumber?: string | null;
   socialSecurityNumber?: string | null;
   taxId?: string | null;
@@ -33,9 +37,12 @@ interface CreateEmployeeInput {
   maritalStatus?: string | null;
   dependentsCount?: number;
   emergencyContactName?: string | null;
+  emergencyContactFirstName?: string | null;
   emergencyContactRelationship?: string | null;
   emergencyContactPhone?: string | null;
+  emergencyContactWhatsapp?: string | null;
   emergencyContactEmail?: string | null;
+  emergencyContactAddress?: string | null;
   employmentStatus?: string;
   terminationDate?: Date | null;
   terminationReason?: string | null;
@@ -66,6 +73,10 @@ interface UpdateEmployeeInput {
   hrManagerId?: string | null;
   referralEmployeeId?: string | null;
   employeeNumber?: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
   socialSecurityNumber?: string | null;
   taxId?: string | null;
   jobTitle?: string | null;
@@ -83,9 +94,12 @@ interface UpdateEmployeeInput {
   maritalStatus?: string | null;
   dependentsCount?: number;
   emergencyContactName?: string | null;
+  emergencyContactFirstName?: string | null;
   emergencyContactRelationship?: string | null;
   emergencyContactPhone?: string | null;
+  emergencyContactWhatsapp?: string | null;
   emergencyContactEmail?: string | null;
+  emergencyContactAddress?: string | null;
   employmentStatus?: string;
   terminationDate?: Date | null;
   terminationReason?: string | null;
@@ -182,7 +196,11 @@ export class HrService {
     if (options.search) {
       const term = `%${options.search.toLowerCase()}%`;
       qb.andWhere(
-        '(LOWER(e.job_title) LIKE :term OR LOWER(e.employee_number) LIKE :term)',
+        `(LOWER(e.job_title) LIKE :term
+          OR LOWER(e.employee_number) LIKE :term
+          OR LOWER(COALESCE(e.first_name, user.first_name, '')) LIKE :term
+          OR LOWER(COALESCE(e.last_name, user.last_name, '')) LIKE :term
+          OR LOWER(COALESCE(e.email, user.email, '')) LIKE :term)`,
         { term },
       );
     }
@@ -219,8 +237,37 @@ export class HrService {
   ): Promise<Employee> {
     const userId = input.userId ?? null;
 
-    if (!userId) {
-      throw new BadRequestException('userId est obligatoire');
+    // Un collaborateur n'a pas besoin de compte pour travailler dans
+    // l'entreprise. Il doit en revanche rester identifiable : soit par le
+    // compte auquel il est rattache, soit par son nom sur la fiche RH.
+    // Miroir applicatif de la contrainte chk_employees_identifiable.
+    const lastName = input.lastName?.trim() || null;
+    if (!userId && !lastName) {
+      throw new BadRequestException(
+        'Un collaborateur sans compte utilisateur doit au moins avoir un nom',
+      );
+    }
+
+    // Quand un compte existe, son etat civil fait foi et alimente la fiche :
+    // les deux sources ne doivent pas diverger silencieusement.
+    let identity = {
+      firstName: input.firstName?.trim() || null,
+      lastName,
+      email: input.email?.trim() || null,
+      phone: input.phone?.trim() || null,
+    };
+
+    if (userId) {
+      const account = await this.usersRepo.findOne({ where: { id: userId } });
+      if (!account) {
+        throw new BadRequestException('Utilisateur introuvable');
+      }
+      identity = {
+        firstName: identity.firstName ?? account.firstName ?? null,
+        lastName: identity.lastName ?? account.lastName ?? null,
+        email: identity.email ?? account.email ?? null,
+        phone: identity.phone ?? account.phone ?? null,
+      };
     }
 
     const employeeNumber = input.employeeNumber?.trim() || await this.getNextEmployeeNumber(organizationId);
@@ -229,6 +276,7 @@ export class HrService {
       const employee = this.employeesRepo.create({
         organizationId,
         userId,
+        ...identity,
         departmentId: input.departmentId ?? null,
         positionId: input.positionId ?? null,
         managerId: input.managerId ?? null,
@@ -251,9 +299,12 @@ export class HrService {
         maritalStatus: input.maritalStatus ?? null,
         dependentsCount: input.dependentsCount ?? 0,
         emergencyContactName: input.emergencyContactName ?? null,
+        emergencyContactFirstName: input.emergencyContactFirstName ?? null,
         emergencyContactRelationship: input.emergencyContactRelationship ?? null,
         emergencyContactPhone: input.emergencyContactPhone ?? null,
+        emergencyContactWhatsapp: input.emergencyContactWhatsapp ?? null,
         emergencyContactEmail: input.emergencyContactEmail ?? null,
+        emergencyContactAddress: input.emergencyContactAddress ?? null,
         employmentStatus: input.employmentStatus ?? 'active',
         terminationDate: input.terminationDate ?? null,
         terminationReason: input.terminationReason ?? null,
@@ -267,6 +318,24 @@ export class HrService {
       });
 
       const saved = await this.employeesRepo.save(employee);
+
+      // Devenir collaborateur donne le role socle, en plus des roles deja
+      // portes par le compte. Hors transaction volontairement : un echec RBAC
+      // ne doit pas annuler l'embauche.
+      if (userId) {
+        try {
+          await this.usersService.ensureDefaultCollaboratorRole(
+            organizationId,
+            userId,
+            createdBy,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Role collaborateur non attribue a l'utilisateur ${userId}: ${(err as Error).message}`,
+          );
+        }
+      }
+
       return saved;
     } catch (error) {
       console.error('[HrService] Error creating employee:', error);
@@ -306,10 +375,17 @@ export class HrService {
     if (input.birthDate !== undefined) patch.birthDate = input.birthDate ? new Date(input.birthDate) : null;
     if (input.maritalStatus !== undefined) patch.maritalStatus = input.maritalStatus;
     if (input.dependentsCount !== undefined) patch.dependentsCount = input.dependentsCount;
+    if (input.firstName !== undefined) patch.firstName = input.firstName;
+    if (input.lastName !== undefined) patch.lastName = input.lastName;
+    if (input.email !== undefined) patch.email = input.email;
+    if (input.phone !== undefined) patch.phone = input.phone;
     if (input.emergencyContactName !== undefined) patch.emergencyContactName = input.emergencyContactName;
+    if (input.emergencyContactFirstName !== undefined) patch.emergencyContactFirstName = input.emergencyContactFirstName;
     if (input.emergencyContactRelationship !== undefined) patch.emergencyContactRelationship = input.emergencyContactRelationship;
     if (input.emergencyContactPhone !== undefined) patch.emergencyContactPhone = input.emergencyContactPhone;
+    if (input.emergencyContactWhatsapp !== undefined) patch.emergencyContactWhatsapp = input.emergencyContactWhatsapp;
     if (input.emergencyContactEmail !== undefined) patch.emergencyContactEmail = input.emergencyContactEmail;
+    if (input.emergencyContactAddress !== undefined) patch.emergencyContactAddress = input.emergencyContactAddress;
     if (input.employmentStatus) patch.employmentStatus = input.employmentStatus;
     if (input.terminationDate !== undefined) patch.terminationDate = input.terminationDate;
     if (input.terminationReason !== undefined) patch.terminationReason = input.terminationReason;
@@ -409,6 +485,96 @@ export class HrService {
     const result = await this.employeesRepo.update(where, patch as any);
     return { affected: result.affected ?? 0 };
   }
+  /**
+   * Symetrique de findUsersWithoutEmployee : les collaborateurs qui n'ont pas
+   * encore de compte. Sert a rattacher un dossier RH existant lors de la
+   * creation d'un utilisateur, plutot que de creer un doublon.
+   */
+  async findEmployeesWithoutUser(organizationId: string, search?: string) {
+    const qb = this.employeesRepo
+      .createQueryBuilder('e')
+      .leftJoinAndSelect('e.department', 'department')
+      .where('e.organization_id = :orgId', { orgId: organizationId })
+      .andWhere('e.user_id IS NULL');
+
+    if (search && search.trim()) {
+      const term = `%${search.trim().toLowerCase()}%`;
+      qb.andWhere(
+        `(LOWER(COALESCE(e.first_name, '')) LIKE :term
+          OR LOWER(COALESCE(e.last_name, '')) LIKE :term
+          OR LOWER(COALESCE(e.email, '')) LIKE :term
+          OR LOWER(e.employee_number) LIKE :term)`,
+        { term },
+      );
+    }
+
+    return qb.orderBy('e.last_name', 'ASC').take(100).getMany();
+  }
+
+  /**
+   * Rattache un compte a une fiche RH existante. La relation est 1-1 des deux
+   * cotes (UNIQUE sur employees.user_id), on refuse donc explicitement les
+   * rattachements qui la violeraient plutot que de laisser remonter un 23505.
+   */
+  async linkEmployeeToUser(
+    organizationId: string,
+    employeeId: string,
+    userId: string,
+    assignedBy: string | null,
+  ): Promise<Employee> {
+    const employee = await this.employeesRepo.findOne({
+      where: { id: employeeId, organizationId },
+    });
+    if (!employee) {
+      throw new BadRequestException('Collaborateur introuvable');
+    }
+    if (employee.userId && employee.userId !== userId) {
+      throw new BadRequestException(
+        'Ce collaborateur est deja rattache a un autre compte',
+      );
+    }
+
+    const account = await this.usersRepo.findOne({
+      where: { id: userId, organizationId },
+    });
+    if (!account) {
+      throw new BadRequestException('Utilisateur introuvable');
+    }
+
+    const alreadyLinked = await this.employeesRepo.findOne({
+      where: { userId, organizationId },
+    });
+    if (alreadyLinked && alreadyLinked.id !== employeeId) {
+      throw new BadRequestException(
+        'Ce compte est deja rattache a un autre collaborateur',
+      );
+    }
+
+    employee.userId = userId;
+    // L'etat civil du compte comble les trous de la fiche, sans ecraser une
+    // saisie RH deliberement differente.
+    employee.firstName = employee.firstName ?? account.firstName ?? null;
+    employee.lastName = employee.lastName ?? account.lastName ?? null;
+    employee.email = employee.email ?? account.email ?? null;
+    employee.phone = employee.phone ?? account.phone ?? null;
+
+    const saved = await this.employeesRepo.save(employee);
+
+    try {
+      await this.usersService.ensureDefaultCollaboratorRole(
+        organizationId,
+        userId,
+        assignedBy,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Role collaborateur non attribue a ${userId}: ${(err as Error).message}`,
+      );
+    }
+
+    return saved;
+  }
+
   async findUsersWithoutEmployee(organizationId: string, search?: string) {
     // First, get all user IDs that already have an employee record
     const existingEmployees = await this.employeesRepo

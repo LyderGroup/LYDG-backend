@@ -1,8 +1,42 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { IsString, IsOptional, IsBoolean, IsUUID, IsEmail } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  ValidateNested,
+} from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import { Organization } from './organizations.entity';
+
+/**
+ * Une entrée de réseau social. `network` est un identifiant libre côté API
+ * (le front propose une liste) pour ne pas imposer une migration à chaque
+ * nouvelle plateforme.
+ */
+export class OrganizationSocialNetworkDto {
+  @IsString()
+  @IsNotEmpty()
+  network: string = '';
+
+  @IsString()
+  @IsNotEmpty()
+  url: string = '';
+}
+
+/**
+ * `@IsOptional()` n'ignore que `undefined` et `null` : une chaîne vide arrive
+ * jusqu'à `@IsUUID()` et déclenche « parentOrgId must be a UUID ». Or un
+ * `<select>` sans sélection envoie précisément `''`. On normalise donc en
+ * amont — c'est aussi ce qui permet de détacher une filiale de son parent.
+ */
+const EmptyStringToNull = () =>
+  Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? null : value));
 
 export class CreateOrganizationDto {
   @IsString()
@@ -68,9 +102,16 @@ export class CreateOrganizationDto {
   @IsOptional()
   language?: string;
 
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OrganizationSocialNetworkDto)
+  @IsOptional()
+  socialNetworks?: OrganizationSocialNetworkDto[];
+
+  @EmptyStringToNull()
   @IsUUID()
   @IsOptional()
-  parentOrgId?: string;
+  parentOrgId?: string | null;
 
   @IsBoolean()
   @IsOptional()
@@ -147,6 +188,13 @@ export class UpdateOrganizationDto {
   @IsOptional()
   language?: string;
 
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OrganizationSocialNetworkDto)
+  @IsOptional()
+  socialNetworks?: OrganizationSocialNetworkDto[];
+
+  @EmptyStringToNull()
   @IsUUID()
   @IsOptional()
   parentOrgId?: string | null;
@@ -192,6 +240,37 @@ export class OrganizationsService {
     return this.organizationsRepo.findOne({ where: { id } });
   }
 
+  /**
+   * Une organisation rattachée à un parent ne peut pas être elle-même racine.
+   * Plusieurs racines sont en revanche autorisées : chacune porte son propre
+   * arbre de filiales.
+   */
+  private async assertParentIsValid(
+    parentOrgId: string | null | undefined,
+    isRootOrganization: boolean | undefined,
+    selfId?: string,
+  ): Promise<void> {
+    if (!parentOrgId) return;
+
+    if (isRootOrganization) {
+      throw new BadRequestException(
+        'Une organisation rattachée à une organisation racine ne peut pas être racine elle-même',
+      );
+    }
+    if (selfId && parentOrgId === selfId) {
+      throw new BadRequestException(
+        'Une organisation ne peut pas être sa propre organisation racine',
+      );
+    }
+
+    const parent = await this.organizationsRepo.findOne({
+      where: { id: parentOrgId },
+    });
+    if (!parent) {
+      throw new BadRequestException('Organisation racine introuvable');
+    }
+  }
+
   async create(dto: CreateOrganizationDto, userId: string): Promise<Organization> {
     if (dto.nameCode) {
       const existing = await this.organizationsRepo.findOne({
@@ -201,6 +280,8 @@ export class OrganizationsService {
         throw new BadRequestException('Ce code organisation existe déjà');
       }
     }
+
+    await this.assertParentIsValid(dto.parentOrgId, dto.isRootOrganization);
 
     const org = this.organizationsRepo.create({
       ...dto,
@@ -224,6 +305,12 @@ export class OrganizationsService {
         throw new BadRequestException('Ce code organisation existe déjà');
       }
     }
+
+    await this.assertParentIsValid(
+      dto.parentOrgId,
+      dto.isRootOrganization ?? org.isRootOrganization,
+      id,
+    );
 
     Object.assign(org, dto, { updatedBy: userId });
     return this.organizationsRepo.save(org);

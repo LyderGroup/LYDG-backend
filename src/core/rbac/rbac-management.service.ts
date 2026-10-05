@@ -5,6 +5,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { IsString, IsOptional, IsBoolean, IsNumber, IsArray, IsUUID, IsDateString } from 'class-validator';
 import { Role } from './role.entity';
 import { Permission } from './permission.entity';
+import { buildPermissionLabel } from './permission-labels';
 import { RolePermission } from './role-permission.entity';
 import { UserRole } from './user-role.entity';
 
@@ -306,10 +307,29 @@ export class RbacManagementService {
       if (!grouped[perm.resource]) {
         grouped[perm.resource] = [];
       }
-      grouped[perm.resource].push(perm);
+      grouped[perm.resource].push(this.withReadableLabel(perm));
     }
 
     return grouped;
+  }
+
+  /**
+   * Remplace le libelle stocke par un libelle lisible calcule depuis le code.
+   *
+   * On ne touche pas a la base : la generation est faite a la lecture, donc
+   * ameliorer une formulation ne demande aucune migration. Les champs d'origine
+   * restent accessibles via le code, toujours renvoye au client.
+   */
+  private withReadableLabel(permission: Permission): Permission {
+    // `code` est nullable en base : sans code il n'y a rien a composer, on
+    // laisse alors le libelle d'origine intact.
+    if (!permission.code) return permission;
+
+    const label = buildPermissionLabel(permission.code);
+    return Object.assign(permission, {
+      displayName: label.displayName,
+      description: label.description,
+    });
   }
 
   // Module labels and display order for the grouped-by-module endpoint.
@@ -318,15 +338,15 @@ export class RbacManagementService {
     module_a_pilotage:   { label: 'Pilotage',                order: 1 },
     module_b_projects:   { label: 'Projets & Tâches',        order: 2 },
     module_c_rh:         { label: 'Ressources Humaines',     order: 3 },
-    module_d_finance:    { label: 'Finance & CRM',           order: 4 },
-    module_e_academy:    { label: 'Academy & LMS',           order: 5 },
+    module_d_finance:    { label: 'Finance',           order: 4 },
+    module_e_academy:    { label: 'Academy',           order: 5 },
     module_f_documents:  { label: 'Documents',         order: 6 },
   };
 
   // Resource labels (human-readable French names)
   private static readonly RESOURCE_LABELS: Record<string, string> = {
     'user':                      'Utilisateurs',
-    'role':                      'Rôles',
+    'role':                      'Profils',
     'system':                    'Système',
     'project':                   'Projets',
     'project.task':              'Tâches',
@@ -364,6 +384,23 @@ export class RbacManagementService {
     'enrollment':                'Inscriptions',
     'session':                   'Sessions de formation',
     'academy':                   'Academy (transverse)',
+    // Nouvelle nomenclature projets : parsePermissionCode garde tout ce qui
+    // precede le dernier segment comme ressource, d'ou ces cles composees.
+    'projects.project':          'Projets',
+    'projects.task':             'Tâches',
+    'projects.subtask':          'Sous-tâches',
+    'projects.comment':          'Commentaires',
+    'projects.member':           'Membres de projet',
+    'projects.dependency':       'Dépendances entre tâches',
+    'projects.workflow':         'Circuits de validation',
+    'projects.settings':         'Paramètres des projets',
+    'projects.reports':          'Rapports de projet',
+    // Nomenclature historique, encore semee pour la retro-compatibilite.
+    'task':                      'Tâches (ancien)',
+    'member':                    'Membres de projet (ancien)',
+    'employee':                  'Collaborateurs (ancien)',
+    'attendance':                'Pointages (ancien)',
+    'hr.conges':                 'Congés',
     // Module F — Documents
     'library':                   'Bibliothèques',
     'folder':                    'Dossiers',
@@ -402,7 +439,9 @@ export class RbacManagementService {
           permissions: [],
         };
       }
-      result[moduleCode].resources[perm.resource].permissions.push(perm);
+      result[moduleCode].resources[perm.resource].permissions.push(
+        this.withReadableLabel(perm),
+      );
     }
 
     // Sort modules by display order

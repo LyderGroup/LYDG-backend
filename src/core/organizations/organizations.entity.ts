@@ -59,6 +59,10 @@ export class Organization {
   @Column({ type: 'varchar', length: 255, nullable: true })
   website!: string | null;
 
+  /** [{ network: 'linkedin', url: 'https://…' }, …] — voir OrganizationSocialNetworkDto. */
+  @Column({ type: 'jsonb', name: 'social_networks', default: () => "'[]'::jsonb" })
+  socialNetworks!: { network: string; url: string }[];
+
   @Column({ type: 'varchar', length: 3, default: 'XOF' })
   currency!: string;
 

@@ -10,6 +10,7 @@ import {
   LEGACY_PROJECT_PERMISSION_CODES,
 } from '../projects/project.permissions';
 import { GLOBAL_PERMISSIONS } from '../global/global.permissions';
+import { buildPermissionLabel } from './permission-labels';
 
 @Injectable()
 export class PermissionSeederService {
@@ -33,7 +34,7 @@ export class PermissionSeederService {
     // Seed HR permissions
     for (const [key, code] of Object.entries(HR_PERMISSIONS)) {
       const [resource, action] = this.parsePermissionCode(code as string);
-      const displayName = this.formatDisplayName(key);
+      const label = buildPermissionLabel(code as string);
 
       const existing = await this.permissionsRepo.findOne({ where: { code: code as string } });
       if (!existing) {
@@ -41,9 +42,9 @@ export class PermissionSeederService {
           code: code as string,
           resource,
           action,
-          displayName,
-          description: displayName,
-          systemModuleCode: 'hr',
+          displayName: label.displayName,
+          description: label.description,
+          systemModuleCode: 'module_c_rh',
           isCrudAction: !action.includes('.'),
         });
         seeded++;
@@ -58,7 +59,7 @@ export class PermissionSeederService {
     ];
     for (const code of allProjectCodes) {
       const [resource, action] = this.parsePermissionCode(code);
-      const displayName = this.formatDisplayName(code.replace(/\./g, '_').toUpperCase());
+      const label = buildPermissionLabel(code);
 
       const existing = await this.permissionsRepo.findOne({ where: { code } });
       if (!existing) {
@@ -66,8 +67,8 @@ export class PermissionSeederService {
           code,
           resource,
           action,
-          displayName,
-          description: displayName,
+          displayName: label.displayName,
+          description: label.description,
           systemModuleCode: 'module_b_projects',
           isCrudAction: !action.includes('.'),
         });
@@ -78,7 +79,7 @@ export class PermissionSeederService {
     // Seed Global permissions
     for (const [key, code] of Object.entries(GLOBAL_PERMISSIONS)) {
       const [resource, action] = this.parsePermissionCode(code as string);
-      const displayName = this.formatDisplayName(key);
+      const label = buildPermissionLabel(code as string);
 
       const existing = await this.permissionsRepo.findOne({ where: { code: code as string } });
       if (!existing) {
@@ -86,9 +87,9 @@ export class PermissionSeederService {
           code: code as string,
           resource,
           action,
-          displayName,
-          description: displayName,
-          systemModuleCode: 'core',
+          displayName: label.displayName,
+          description: label.description,
+          systemModuleCode: 'global',
           isCrudAction: !action.includes('.'),
         });
         seeded++;
@@ -113,13 +114,4 @@ export class PermissionSeederService {
     return [code, 'unknown'];
   }
 
-  private formatDisplayName(key: string): string {
-    return key
-      .replace(/_/g, ' ')
-      .replace(/([A-Z])/g, ' $1')
-      .trim()
-      .split(' ')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
 }

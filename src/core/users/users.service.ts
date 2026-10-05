@@ -29,6 +29,15 @@ interface UpdateUserInput {
   isActive?: boolean;
 }
 
+/**
+ * Role socle attribue a tout utilisateur de la plateforme. Il ne porte aucun
+ * privilege particulier : il materialise « cette personne fait partie de
+ * l'entreprise ». Les droits reels viennent des roles additionnels, qu'un
+ * utilisateur peut cumuler (core.user_roles est un UNIQUE(user_id, role_id),
+ * pas une relation 1-1).
+ */
+export const DEFAULT_COLLABORATOR_ROLE_CODE = 'COLLABORATEUR';
+
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
@@ -229,6 +238,25 @@ export class UsersService {
       });
       await userRolesRepo.save(userRole);
 
+      // Socle collaborateur, en plus du role metier choisi. Absent de la base
+      // (organisation sans seed RBAC) : on n'echoue pas la creation pour ca.
+      // Filtre sur l'organisation : core.roles a UNIQUE(organization_id, code)
+      // et les roles tenant sont semes pour CHAQUE organisation. Sans ce
+      // filtre, on pourrait attribuer le role d'un autre tenant.
+      const baseRole = await manager.getRepository(Role).findOne({
+        where: { code: DEFAULT_COLLABORATOR_ROLE_CODE, organizationId },
+      });
+      if (baseRole && baseRole.id !== role.id) {
+        await userRolesRepo.save(
+          userRolesRepo.create({
+            userId: persisted.id,
+            roleId: baseRole.id,
+            assignedBy: currentUserId,
+            expiresAt: null,
+          }),
+        );
+      }
+
       return persisted;
     });
 
@@ -396,6 +424,56 @@ export class UsersService {
     return { roleId: role.id, roleName: role.name, roleCode: role.code };
   }
 
+  /**
+   * Garantit qu'un compte porte le role socle collaborateur, sans toucher a
+   * ses autres roles. Appele quand un utilisateur devient collaborateur
+   * (creation d'une fiche RH rattachee, ou rattachement a posteriori).
+   *
+   * Silencieux si le role n'est pas seme : l'operation metier qui l'appelle ne
+   * doit pas echouer pour une base RBAC incomplete.
+   */
+  async ensureDefaultCollaboratorRole(
+    organizationId: string,
+    userId: string,
+    assignedBy: string | null,
+  ): Promise<boolean> {
+    // Scope tenant obligatoire : chaque organisation possede sa propre ligne
+    // COLLABORATEUR (UNIQUE(organization_id, code)).
+    const baseRole = await this.rolesRepo.findOne({
+      where: { code: DEFAULT_COLLABORATOR_ROLE_CODE, organizationId },
+    });
+    if (!baseRole) {
+      this.logger.warn(
+        `Role ${DEFAULT_COLLABORATOR_ROLE_CODE} absent : socle non attribue a ${userId}`,
+      );
+      return false;
+    }
+
+    const existing = await this.userRolesRepo.findOne({
+      where: { userId, roleId: baseRole.id } as any,
+    });
+
+    if (!existing) {
+      await this.userRolesRepo.save(
+        this.userRolesRepo.create({
+          userId,
+          roleId: baseRole.id,
+          assignedBy,
+          expiresAt: null,
+          isActive: true,
+        }),
+      );
+      return true;
+    }
+
+    if (!existing.isActive) {
+      await this.userRolesRepo.update({ id: existing.id } as any, { isActive: true } as any);
+      return true;
+    }
+
+    return false;
+  }
+
   async changeRoleForUser(
     organizationId: string,
     assignedBy: string | null,
@@ -415,11 +493,49 @@ export class UsersService {
     await this.usersRepo.manager.transaction(async (manager) => {
       const userRolesRepo = manager.getRepository(UserRole);
 
-      // Désactiver les rôles actifs existants (sauf le rôle cible)
-      await userRolesRepo.update(
-        { userId, isActive: true } as any,
-        { isActive: false } as any,
+      // Cette route change le role METIER principal. Elle desactivait tous les
+      // roles actifs, ce qui rendait le modele mono-role alors que
+      // core.user_roles supporte le cumul — et retirait au passage le socle
+      // collaborateur. On preserve donc ce dernier.
+      // Filtre sur l'organisation : core.roles a UNIQUE(organization_id, code)
+      // et les roles tenant sont semes pour CHAQUE organisation. Sans ce
+      // filtre, on pourrait attribuer le role d'un autre tenant.
+      const baseRole = await manager.getRepository(Role).findOne({
+        where: { code: DEFAULT_COLLABORATOR_ROLE_CODE, organizationId },
+      });
+
+      const toDeactivate = await userRolesRepo.find({
+        where: { userId, isActive: true } as any,
+      });
+      const obsolete = toDeactivate.filter(
+        (ur) => ur.roleId !== role.id && ur.roleId !== baseRole?.id,
       );
+      if (obsolete.length > 0) {
+        await userRolesRepo.update(
+          { id: In(obsolete.map((ur) => ur.id)) } as any,
+          { isActive: false } as any,
+        );
+      }
+
+      // Le socle reste attache meme quand on change de role metier.
+      if (baseRole && baseRole.id !== role.id) {
+        const baseLink = await userRolesRepo.findOne({
+          where: { userId, roleId: baseRole.id } as any,
+        });
+        if (!baseLink) {
+          await userRolesRepo.save(
+            userRolesRepo.create({
+              userId,
+              roleId: baseRole.id,
+              assignedBy,
+              expiresAt: null,
+              isActive: true,
+            }),
+          );
+        } else if (!baseLink.isActive) {
+          await userRolesRepo.update({ id: baseLink.id } as any, { isActive: true } as any);
+        }
+      }
 
       const existing = await userRolesRepo.findOne({ where: { userId, roleId: role.id } as any });
 

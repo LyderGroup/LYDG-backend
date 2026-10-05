@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -11,12 +12,15 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, In, Repository } from 'typeorm';
+import { IsNull, In, Like, Repository } from 'typeorm';
 import { IsString, IsOptional, IsBoolean, IsNumber, IsEnum, IsArray, IsUUID } from 'class-validator';
 import { Role } from './role.entity';
 import { PermissionGuard } from './permission.guard';
 import { RequirePermission } from './require-permission.decorator';
 import { GLOBAL_PERMISSIONS } from '../global/global.permissions';
+
+/** core.roles.code est un VARCHAR(50). */
+const ROLE_CODE_MAX_LENGTH = 50;
 
 class CreateRoleDto {
   @IsUUID()
@@ -26,8 +30,13 @@ class CreateRoleDto {
   @IsString()
   name!: string;
 
+  /**
+   * Optionnel : dérivé du nom quand il n'est pas fourni. Le front ne l'expose
+   * plus, mais les seeds et scripts d'init continuent d'imposer leurs codes.
+   */
   @IsString()
-  code!: string;
+  @IsOptional()
+  code?: string;
 
   @IsString()
   @IsOptional()
@@ -186,6 +195,51 @@ export class RolesController {
     return this.rolesRepo.findOne({ where: { id } });
   }
 
+  /** Normalise un libellé en code technique : « Chef de Projet » → CHEF_DE_PROJET. */
+  private toRoleCode(value: string): string {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // retire les diacritiques
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, ROLE_CODE_MAX_LENGTH);
+  }
+
+  /**
+   * Résout un code libre pour l'organisation. La contrainte est
+   * UNIQUE(organization_id, code) et elle ignore `is_active` : un profil
+   * désactivé occupe toujours son code, d'où l'absence de filtre ici.
+   */
+  private async resolveUniqueRoleCode(
+    base: string,
+    orgId: string | null,
+  ): Promise<string> {
+    const root = base || 'ROLE';
+
+    // Un seul aller-retour : LIKE 'ROOT%' ramène tous les codes candidats.
+    // (`_` est un joker LIKE, donc la requête sur-sélectionne au pire — les
+    // comparaisons ci-dessous restent des égalités exactes.)
+    const existing = await this.rolesRepo.find({
+      where: {
+        organizationId: orgId === null ? IsNull() : orgId,
+        code: Like(`${root}%`),
+      },
+      select: ['code'],
+    });
+    const taken = new Set(existing.map((role) => role.code));
+
+    for (let attempt = 1; attempt <= 999; attempt++) {
+      const suffix = attempt === 1 ? '' : `_${attempt}`;
+      const candidate = `${root.slice(0, ROLE_CODE_MAX_LENGTH - suffix.length)}${suffix}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+
+    throw new ConflictException(
+      'Impossible de générer un code unique pour ce profil',
+    );
+  }
+
   @Post()
   @RequirePermission(GLOBAL_PERMISSIONS.ROLE_CREATE)
   async create(@Req() req: any, @Body() dto: CreateRoleDto) {
@@ -195,19 +249,33 @@ export class RolesController {
     if (!dto.name || !dto.name.trim()) {
       throw new BadRequestException('Le nom du rôle est obligatoire');
     }
-    if (!dto.code || !dto.code.trim()) {
-      throw new BadRequestException('Le code du rôle est obligatoire');
-    }
+
+    // Le code n'est plus saisi par l'utilisateur : il est dérivé du nom, puis
+    // suffixé (_2, _3…) tant qu'il est pris dans l'organisation.
+    const code = await this.resolveUniqueRoleCode(
+      this.toRoleCode(dto.code?.trim() || dto.name),
+      orgId,
+    );
 
     const role = this.rolesRepo.create({
       organizationId: orgId,
       name: dto.name,
-      code: dto.code,
+      code,
       description: dto.description ?? null,
       roleLevel: dto.roleLevel ?? 1,
       isDefault: dto.isDefault ?? false,
     });
-    return this.rolesRepo.save(role);
+
+    try {
+      return await this.rolesRepo.save(role);
+    } catch (err: any) {
+      // Filet de sécurité : deux créations concurrentes peuvent viser le même
+      // code entre la lecture et l'insertion.
+      if (err?.code === '23505') {
+        throw new ConflictException('Un profil portant ce code existe déjà');
+      }
+      throw err;
+    }
   }
 
   @Patch(':id')

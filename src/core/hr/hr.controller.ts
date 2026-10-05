@@ -20,7 +20,15 @@ import { RequirePermission } from '../rbac/require-permission.decorator';
 import { HR_PERMISSIONS } from './hr.permissions';
 
 class CreateEmployeeDto {
-  @IsString() userId!: string;
+  /**
+   * Optionnel : un collaborateur peut travailler sans compte. Dans ce cas
+   * `lastName` devient obligatoire (verifie dans hr.service).
+   */
+  @IsOptional() @IsString() userId?: string | null;
+  @IsOptional() @IsString() firstName?: string | null;
+  @IsOptional() @IsString() lastName?: string | null;
+  @IsOptional() @IsString() email?: string | null;
+  @IsOptional() @IsString() phone?: string | null;
   @IsOptional() @IsString() departmentId?: string | null;
   @IsOptional() @IsString() positionId?: string | null;
   @IsOptional() @IsString() managerId?: string | null;
@@ -44,9 +52,12 @@ class CreateEmployeeDto {
   @IsOptional() @IsString() maritalStatus?: string | null;
   @IsOptional() @IsInt() dependentsCount?: number;
   @IsOptional() @IsString() emergencyContactName?: string | null;
+  @IsOptional() @IsString() emergencyContactFirstName?: string | null;
   @IsOptional() @IsString() emergencyContactRelationship?: string | null;
   @IsOptional() @IsString() emergencyContactPhone?: string | null;
+  @IsOptional() @IsString() emergencyContactWhatsapp?: string | null;
   @IsOptional() @IsString() emergencyContactEmail?: string | null;
+  @IsOptional() @IsString() emergencyContactAddress?: string | null;
   @IsOptional() @IsString() employmentStatus?: string;
   @IsOptional() @IsString() hireSource?: string | null;
   @IsOptional() @IsArray() badges?: string[];
@@ -58,6 +69,10 @@ class CreateEmployeeDto {
 
 class UpdateEmployeeDto {
   @IsOptional() @IsString() userId?: string | null;
+  @IsOptional() @IsString() firstName?: string | null;
+  @IsOptional() @IsString() lastName?: string | null;
+  @IsOptional() @IsString() email?: string | null;
+  @IsOptional() @IsString() phone?: string | null;
   @IsOptional() @IsString() departmentId?: string | null;
   @IsOptional() @IsString() positionId?: string | null;
   @IsOptional() @IsString() managerId?: string | null;
@@ -81,9 +96,12 @@ class UpdateEmployeeDto {
   @IsOptional() @IsString() maritalStatus?: string | null;
   @IsOptional() @IsInt() dependentsCount?: number;
   @IsOptional() @IsString() emergencyContactName?: string | null;
+  @IsOptional() @IsString() emergencyContactFirstName?: string | null;
   @IsOptional() @IsString() emergencyContactRelationship?: string | null;
   @IsOptional() @IsString() emergencyContactPhone?: string | null;
+  @IsOptional() @IsString() emergencyContactWhatsapp?: string | null;
   @IsOptional() @IsString() emergencyContactEmail?: string | null;
+  @IsOptional() @IsString() emergencyContactAddress?: string | null;
   @IsOptional() @IsString() employmentStatus?: string;
   @IsOptional() @IsDateString() terminationDate?: string | null;
   @IsOptional() @IsString() terminationReason?: string | null;
@@ -94,6 +112,10 @@ class UpdateEmployeeDto {
   @IsOptional() @IsString() workEndTime?: string | null;
   @IsOptional() @IsArray() @IsString({ each: true }) workDays?: string[];
   @IsOptional() @IsNumber() annualLeaveDays?: number | null;
+}
+
+class LinkEmployeeUserDto {
+  @IsString() userId!: string;
 }
 
 class BulkEmployeeActionDto {
@@ -192,6 +214,36 @@ export class HrController {
     return { data: users };
   }
 
+  @Get('employees-without-user')
+  @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_WRITE, { moduleCode: 'module_c_rh' })
+  async listEmployeesWithoutUser(@Req() req: any, @Query('search') search?: string) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const orgId = tenant?.id;
+    if (!orgId) throw new BadRequestException('Tenant non résolu');
+    const employees = await this.hrService.findEmployeesWithoutUser(orgId, search);
+    return { data: employees };
+  }
+
+  @Post('employees/:id/link-user')
+  @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_WRITE, { moduleCode: 'module_c_rh' })
+  async linkEmployeeToUser(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: LinkEmployeeUserDto,
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    const orgId = tenant?.id;
+    if (!orgId) throw new BadRequestException('Tenant non résolu');
+
+    return this.hrService.linkEmployeeToUser(
+      orgId,
+      id,
+      dto.userId,
+      (currentUser?.id as string) ?? null,
+    );
+  }
+
   @Post('employees/link-users')
   @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_WRITE, { moduleCode: 'module_c_rh' })
   async linkEmployeesToUsers(@Req() req: any) {
@@ -239,15 +291,16 @@ export class HrController {
       throw new BadRequestException('La date de début de contrat est obligatoire');
     }
 
-    if (!dto.userId) {
-      throw new BadRequestException('userId est obligatoire');
-    }
 
     return this.hrService.createForTenant(
       orgId,
       (currentUser?.id as string) ?? null,
       {
-        userId: dto.userId,
+        userId: dto.userId ?? null,
+        firstName: dto.firstName ?? null,
+        lastName: dto.lastName ?? null,
+        email: dto.email ?? null,
+        phone: dto.phone ?? null,
         organizationId: orgId,
         departmentId: dto.departmentId ?? null,
         positionId: dto.positionId ?? null,
@@ -271,9 +324,12 @@ export class HrController {
         maritalStatus: dto.maritalStatus ?? null,
         dependentsCount: dto.dependentsCount ?? 0,
         emergencyContactName: dto.emergencyContactName ?? null,
+        emergencyContactFirstName: dto.emergencyContactFirstName ?? null,
         emergencyContactRelationship: dto.emergencyContactRelationship ?? null,
         emergencyContactPhone: dto.emergencyContactPhone ?? null,
+        emergencyContactWhatsapp: dto.emergencyContactWhatsapp ?? null,
         emergencyContactEmail: dto.emergencyContactEmail ?? null,
+        emergencyContactAddress: dto.emergencyContactAddress ?? null,
         employmentStatus: dto.employmentStatus ?? 'active',
         hireSource: dto.hireSource ?? null,
         badges: dto.badges ?? [],
@@ -299,6 +355,10 @@ export class HrController {
       (currentUser?.id as string) ?? null,
       {
         userId: dto.userId,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        phone: dto.phone,
         departmentId: dto.departmentId,
         positionId: dto.positionId,
         managerId: dto.managerId,
@@ -322,9 +382,12 @@ export class HrController {
         maritalStatus: dto.maritalStatus,
         dependentsCount: dto.dependentsCount,
         emergencyContactName: dto.emergencyContactName,
+        emergencyContactFirstName: dto.emergencyContactFirstName,
         emergencyContactRelationship: dto.emergencyContactRelationship,
         emergencyContactPhone: dto.emergencyContactPhone,
+        emergencyContactWhatsapp: dto.emergencyContactWhatsapp,
         emergencyContactEmail: dto.emergencyContactEmail,
+        emergencyContactAddress: dto.emergencyContactAddress,
         employmentStatus: dto.employmentStatus,
         terminationDate: dto.terminationDate === undefined ? undefined : dto.terminationDate === null ? null : new Date(dto.terminationDate),
         terminationReason: dto.terminationReason,
@@ -446,9 +509,12 @@ export class HrController {
         maritalStatus: dto.maritalStatus,
         dependentsCount: dto.dependentsCount,
         emergencyContactName: dto.emergencyContactName,
+        emergencyContactFirstName: dto.emergencyContactFirstName,
         emergencyContactRelationship: dto.emergencyContactRelationship,
         emergencyContactPhone: dto.emergencyContactPhone,
+        emergencyContactWhatsapp: dto.emergencyContactWhatsapp,
         emergencyContactEmail: dto.emergencyContactEmail,
+        emergencyContactAddress: dto.emergencyContactAddress,
       },
     );
   }

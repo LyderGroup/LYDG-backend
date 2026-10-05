@@ -59,6 +59,26 @@ export class Employee {
   @Column({ type: 'uuid', name: 'referral_employee_id', nullable: true })
   referralEmployeeId!: string | null;
 
+  /**
+   * Etat civil porte par la fiche RH.
+   *
+   * Un collaborateur peut travailler dans l'entreprise sans jamais se
+   * connecter : `userId` est alors NULL et ces champs sont la seule source
+   * d'identite. Quand un compte existe, il reste la reference — voir
+   * `displayIdentity()` cote service.
+   */
+  @Column({ type: 'varchar', length: 100, name: 'first_name', nullable: true })
+  firstName!: string | null;
+
+  @Column({ type: 'varchar', length: 100, name: 'last_name', nullable: true })
+  lastName!: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  email!: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  phone!: string | null;
+
   @Column({ type: 'varchar', length: 50, name: 'employee_number' })
   employeeNumber!: string;
 
@@ -114,14 +134,23 @@ export class Employee {
   @Column({ type: 'varchar', length: 255, name: 'emergency_contact_name', nullable: true })
   emergencyContactName!: string | null;
 
+  @Column({ type: 'varchar', length: 255, name: 'emergency_contact_first_name', nullable: true })
+  emergencyContactFirstName!: string | null;
+
   @Column({ type: 'varchar', length: 100, name: 'emergency_contact_relationship', nullable: true })
   emergencyContactRelationship!: string | null;
 
   @Column({ type: 'varchar', length: 20, name: 'emergency_contact_phone', nullable: true })
   emergencyContactPhone!: string | null;
 
+  @Column({ type: 'varchar', length: 20, name: 'emergency_contact_whatsapp', nullable: true })
+  emergencyContactWhatsapp!: string | null;
+
   @Column({ type: 'varchar', length: 255, name: 'emergency_contact_email', nullable: true })
   emergencyContactEmail!: string | null;
+
+  @Column({ type: 'text', name: 'emergency_contact_address', nullable: true })
+  emergencyContactAddress!: string | null;
 
   @Column({ type: 'varchar', length: 50, name: 'employment_status', default: 'active' })
   employmentStatus!: string;

@@ -170,7 +170,7 @@ function buildSslConfig(configService: ConfigService, isProd: boolean) {
     // et l'interceptor de contexte requête (acteur, IP, request_id) à tous.
     AuditModule,
 
-    // StorageModule : @Global, expose SupabaseStorageService (uploads/downloads).
+    // StorageModule : @Global, expose FileStorageService (uploads/downloads).
     StorageModule,
 
     // Module public : API publique (careers, etc.) - sans authentification requise

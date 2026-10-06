@@ -1,13 +1,13 @@
 import { Global, Module } from '@nestjs/common';
-import { SupabaseStorageService } from './supabase-storage.service';
+import { FileStorageService } from './file-storage.service';
 
 /**
- * Module global : expose SupabaseStorageService à toute l'application
- * (uploads/downloads de fichiers) sans import répété.
+ * Module global : expose FileStorageService a toute l'application
+ * (uploads/downloads de fichiers) sans import repete.
  */
 @Global()
 @Module({
-  providers: [SupabaseStorageService],
-  exports: [SupabaseStorageService],
+  providers: [FileStorageService],
+  exports: [FileStorageService],
 })
 export class StorageModule {}

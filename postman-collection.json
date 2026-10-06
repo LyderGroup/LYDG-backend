@@ -108,7 +108,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"fullName\": \"Marie Dupont\",\n  \"email\": \"marie.dupont+{{$randomInt}}@example.com\",\n  \"phone\": \"+33612345678\",\n  \"coverLetter\": \"Je suis très intéressée par ce poste. Mon expérience correspond parfaitement aux besoins de votre équipe.\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/marie-dupont.pdf\",\n  \"cvMimeType\": \"application/pdf\",\n  \"cvSizeBytes\": 524288,\n  \"websiteField\": \"\"\n}"
+          "raw": "{\n  \"fullName\": \"Marie Dupont\",\n  \"email\": \"marie.dupont+{{$randomInt}}@example.com\",\n  \"phone\": \"+33612345678\",\n  \"coverLetter\": \"Je suis très intéressée par ce poste. Mon expérience correspond parfaitement aux besoins de votre équipe.\",\n  \"cvUrl\": \"https://exemple-cv.test/cv/marie-dupont.pdf\",\n  \"cvMimeType\": \"application/pdf\",\n  \"cvSizeBytes\": 524288,\n  \"websiteField\": \"\"\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
@@ -145,7 +145,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"fullName\": \"Bot Spammer\",\n  \"email\": \"bot@spam.com\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/bot.pdf\",\n  \"websiteField\": \"https://spam.com\"\n}"
+          "raw": "{\n  \"fullName\": \"Bot Spammer\",\n  \"email\": \"bot@spam.com\",\n  \"cvUrl\": \"https://exemple-cv.test/cv/bot.pdf\",\n  \"websiteField\": \"https://spam.com\"\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
@@ -171,7 +171,7 @@
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"fullName\": \"Test User\",\n  \"email\": \"test@example.com\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/file.exe\"\n}"
+          "raw": "{\n  \"fullName\": \"Test User\",\n  \"email\": \"test@example.com\",\n  \"cvUrl\": \"https://exemple-cv.test/cv/file.exe\"\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",
@@ -223,7 +223,7 @@
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"fullName\": \"Marie Dupont\",\n  \"email\": \"marie.dupont@example.com\",\n  \"cvUrl\": \"https://storage.supabase.co/uploads/cv/marie.pdf\"\n}"
+          "raw": "{\n  \"fullName\": \"Marie Dupont\",\n  \"email\": \"marie.dupont@example.com\",\n  \"cvUrl\": \"https://exemple-cv.test/cv/marie.pdf\"\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/public/careers/jobs/{{slug}}/apply",

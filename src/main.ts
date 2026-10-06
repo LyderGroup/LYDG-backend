@@ -6,7 +6,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { corsOriginCallback } from './core/security/cors.config';
 import { AllExceptionsFilter } from './core/security/all-exceptions.filter';
-import { SupabaseStorageService } from './core/storage/supabase-storage.service';
+import { FileStorageService } from './core/storage/file-storage.service';
 
 // Certains hébergeurs (IP partagées de PaaS) ont leur egress IPv6 bloqué par
 // Google → 403 "Error fetching public keys" sur googleapis.com, ce qui casse
@@ -40,11 +40,11 @@ async function bootstrap() {
   });
 
   // /uploads/* (autres dossiers : leave-requests, employee-documents, etc.)
-  // servis depuis Supabase Storage — le disque Render est éphémère. Ce
-  // middleware s'exécute avant les guards Nest (comme l'ancien statique), donc
-  // ces fichiers restent accessibles par URL comme auparavant. Les documents RH
-  // sensibles sont bloqués plus haut (403) et passent par l'endpoint permissionné.
-  const storageService = app.get(SupabaseStorageService);
+  // servis par FileStorageService depuis STORAGE_ROOT, hors du dossier public.
+  // Ce middleware s'exécute avant les guards Nest, donc ces fichiers restent
+  // accessibles par URL. Les documents RH sensibles sont bloqués plus haut
+  // (403) et passent par l'endpoint permissionné.
+  const storageService = app.get(FileStorageService);
   app.use('/uploads', async (req: any, res: any, next: any) => {
     // Laisse le routage Nest gérer le reste (préflight CORS OPTIONS, etc.).
     if (req.method !== 'GET' && req.method !== 'HEAD') {

@@ -61,7 +61,7 @@ export function makeStorageKey(subdir: string, originalName: string): string {
 /**
  * Construit une configuration FileInterceptor sécurisée :
  * - Stockage EN MÉMOIRE (file.buffer) : les fichiers partent ensuite vers
- *   Supabase Storage (le disque Render est éphémère).
+ *   le stockage disque du serveur (STORAGE_ROOT), hors dossier public.
  * - fileFilter sur MIME type + extension.
  * - limits.fileSize pour empêcher les uploads géants (DoS).
  */

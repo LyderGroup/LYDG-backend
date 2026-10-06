@@ -3,7 +3,7 @@
  *
  * Body de POST /public/careers/jobs/:slug/apply
  * Validation stricte côté serveur : honeypot, URL CV restreinte aux storages
- * autorisés (Supabase/S3), MIME et taille à confirmer côté backend si fournis.
+ * autorisés, MIME et taille à confirmer côté backend si fournis.
  */
 
 import {
@@ -55,7 +55,7 @@ export class PublicJobApplicationDto {
   coverLetter?: string;
 
   /**
-   * URL du CV. Le fichier doit être uploadé en amont sur Supabase Storage / S3
+   * URL du CV. Le fichier doit être uploadé en amont sur un stockage externe
    * par le frontend. Le backend ne reçoit que l'URL finale.
    *
    * Doit pointer vers un PDF/DOC/DOCX (extension vérifiée).
@@ -68,7 +68,7 @@ export class PublicJobApplicationDto {
   })
   cvUrl!: string;
 
-  /** MIME type fourni par le storage (Supabase/S3 le retourne). */
+  /** MIME type fourni par le stockage d'origine, s'il est connu. */
   @IsOptional()
   @IsIn([...ALLOWED_CV_MIME_TYPES], {
     message: 'Type de fichier CV non autorisé',

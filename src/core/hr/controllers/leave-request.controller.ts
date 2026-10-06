@@ -29,7 +29,7 @@ import {
   MIME_IMAGES,
   MIME_OFFICE,
 } from '../../security/multer.config';
-import { SupabaseStorageService } from '../../storage/supabase-storage.service';
+import { FileStorageService } from '../../storage/file-storage.service';
 
 // Pièces jointes des demandes de congés : PDF + images + DOC, max 10 MB.
 const leaveRequestUploadConfig = buildUploadConfig({
@@ -79,7 +79,7 @@ class RejectLeaveRequestDto {
 export class LeaveRequestController {
   constructor(
     private readonly service: LeaveRequestService,
-    private readonly storage: SupabaseStorageService,
+    private readonly storage: FileStorageService,
   ) { }
 
   private userContext(req: any): LeaveRequestUserContext {

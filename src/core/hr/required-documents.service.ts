@@ -8,7 +8,7 @@ import {
 } from './employee-required-document.entity';
 import { Employee } from './employee.entity';
 import { makeStorageKey } from '../security/multer.config';
-import { SupabaseStorageService } from '../storage/supabase-storage.service';
+import { FileStorageService } from '../storage/file-storage.service';
 
 export interface RequiredDocumentConfig {
   type: RequiredDocumentType;
@@ -134,7 +134,7 @@ export class RequiredDocumentsService {
     private documentsRepo: Repository<EmployeeRequiredDocument>,
     @InjectRepository(Employee)
     private employeesRepo: Repository<Employee>,
-    private readonly storage: SupabaseStorageService,
+    private readonly storage: FileStorageService,
   ) { }
 
   /**
@@ -224,8 +224,8 @@ export class RequiredDocumentsService {
       doc.isOptional = config?.isOptional || false;
     }
 
-    // Upload vers Supabase Storage ; on stocke la clé Storage (= chemin
-    // relatif "employee-documents/<uuid>.ext", servi via /uploads/<clé>).
+    // Écriture sur disque ; on stocke la clé (= chemin relatif
+    // "employee-documents/<uuid>.ext", servi via /uploads/<clé>).
     const key = makeStorageKey('employee-documents', file.originalname);
     await this.storage.upload(key, file.buffer, file.mimetype);
 

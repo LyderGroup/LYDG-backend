@@ -25,7 +25,7 @@ X-Device-Fingerprint: {{fingerprint}}
   "email": "marie.dupont@example.com",
   "phone": "+33612345678",
   "coverLetter": "Je suis très intéressée par ce poste, mon profil correspond.",
-  "cvUrl": "https://storage.supabase.co/uploads/cv/marie.pdf",
+  "cvUrl": "https://exemple-cv.test/cv/marie.pdf",
   "cvMimeType": "application/pdf",
   "cvSizeBytes": 524288,
   "websiteField": ""
@@ -38,7 +38,7 @@ Content-Type: application/json
 {
   "fullName": "Bot Spammer",
   "email": "bot@spam.com",
-  "cvUrl": "https://storage.supabase.co/uploads/cv/bot.pdf",
+  "cvUrl": "https://exemple-cv.test/cv/bot.pdf",
   "websiteField": "https://spam.com"
 }
 
@@ -49,7 +49,7 @@ Content-Type: application/json
 {
   "fullName": "Test User",
   "email": "test@example.com",
-  "cvUrl": "https://storage.supabase.co/uploads/cv/file.exe"
+  "cvUrl": "https://exemple-cv.test/cv/file.exe"
 }
 
 ### 6. Postuler — HTTP non-HTTPS (doit retourner 400)
@@ -69,7 +69,7 @@ Content-Type: application/json
 {
   "fullName": "Marie Dupont",
   "email": "marie.dupont@example.com",
-  "cvUrl": "https://storage.supabase.co/uploads/cv/marie.pdf"
+  "cvUrl": "https://exemple-cv.test/cv/marie.pdf"
 }
 
 ### 8. Slug inexistant (doit retourner 404)

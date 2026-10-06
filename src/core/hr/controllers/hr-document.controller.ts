@@ -28,7 +28,7 @@ import { HrDocumentService } from '../services/hr-document.service';
 import type { HrDocumentType, HrDocumentStatus, HrDocumentAction } from '../entities/hr-document.entity';
 import { IsOptional, IsArray, IsString, IsBoolean, IsDateString, ValidateNested, Allow } from 'class-validator';
 import { buildUploadConfig, makeStorageKey, MIME_DOCUMENTS } from '../../security/multer.config';
-import { SupabaseStorageService } from '../../storage/supabase-storage.service';
+import { FileStorageService } from '../../storage/file-storage.service';
 
 // Configuration du stockage des fichiers : PDF uniquement, max 25 MB
 const hrDocumentUploadConfig = buildUploadConfig({
@@ -82,7 +82,7 @@ export class HrDocumentController {
   constructor(
     private readonly documentService: HrDocumentService,
     @InjectDataSource() private readonly dataSource: DataSource,
-    private readonly storage: SupabaseStorageService,
+    private readonly storage: FileStorageService,
   ) { }
 
   // Créer un nouveau document avec fichier (Super Admin)
@@ -100,7 +100,7 @@ export class HrDocumentController {
       throw new BadRequestException('Fichier requis');
     }
 
-    // Upload vers Supabase Storage (bucket privé). La clé Storage est aussi le
+    // Écriture sur le disque du serveur. La clé de stockage est aussi le
     // chemin "/uploads/..." conservé en DB → l'endpoint de download la relit.
     const key = makeStorageKey('hr-documents', file.originalname);
     await this.storage.upload(key, file.buffer, file.mimetype);
@@ -278,7 +278,7 @@ export class HrDocumentController {
     if (!fileUrl) {
       throw new NotFoundException('Fichier non disponible');
     }
-    const key = SupabaseStorageService.keyFromUploadsUrl(fileUrl);
+    const key = FileStorageService.keyFromUploadsUrl(fileUrl);
     const stored = await this.storage.download(key);
     if (!stored) {
       throw new NotFoundException('Fichier introuvable sur le serveur');

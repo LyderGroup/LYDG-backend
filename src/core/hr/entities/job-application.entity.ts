@@ -80,7 +80,7 @@ export class JobApplication {
   @Column({ type: 'varchar', length: 50, name: 'applicant_phone', nullable: true })
   applicantPhone!: string | null;
 
-  // ─── CV : URL externe (Supabase/S3) + métadonnées de validation ─────────
+  // ─── CV : URL externe fournie par le candidat + métadonnées ─────────────
   @Column({ type: 'text', name: 'cv_url', nullable: true })
   cvUrl!: string | null;
 

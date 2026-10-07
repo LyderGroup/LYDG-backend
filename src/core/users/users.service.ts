@@ -381,9 +381,15 @@ export class UsersService {
         ON ur.user_id = u.id
        AND ur.is_active = true
        AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
-      LEFT JOIN core.roles r ON r.id = ur.role_id AND r.is_active = true
-      WHERE u.id = $1 AND u.organization_id = $2
-      ORDER BY ur.assigned_at DESC NULLS LAST
+      LEFT JOIN core.roles r ON r.id = ur.role_id
+       AND r.is_active = true
+       AND (r.organization_id = $2 OR r.organization_id IS NULL)
+      -- L'identite d'un utilisateur ne depend pas de l'organisation affichee.
+      -- Filtrer sur u.organization_id renvoyait un 400 des qu'un porteur de
+      -- role GLOBAL basculait vers une organisation ou il n'a pas de ligne.
+      -- Seul le ROLE retourne est cadre sur l'organisation selectionnee.
+      WHERE u.id = $1
+      ORDER BY (r.organization_id IS NULL), ur.assigned_at DESC NULLS LAST
       LIMIT 1
       `,
       [userId, organizationId],

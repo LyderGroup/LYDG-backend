@@ -104,5 +104,9 @@ export function corsOriginCallback(
   if (isOriginAllowed(origin)) {
     return callback(null, true);
   }
-  callback(new Error(`CORS blocked for origin: ${origin}`), false);
+  // Refus SANS exception : passer une Error faisait remonter un 500, alors
+  // qu'un refus CORS doit simplement omettre l'en-tete Allow-Origin.
+  // Le navigateur bloque alors la requete, sans erreur serveur.
+  console.warn(`[cors] origine refusee : ${origin}`);
+  callback(null, false);
 }

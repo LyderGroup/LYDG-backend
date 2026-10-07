@@ -24,6 +24,12 @@ export interface CheckInInput {
 export interface CheckOutInput {
   attendanceId: string;
   /**
+   * SECURITE : fiche RH de l'appelant. Sans ce controle, n'importe quel
+   * utilisateur authentifie pouvait pointer le depart d'autrui, y compris
+   * dans une autre organisation, en passant son attendanceId.
+   */
+  employeeId?: string;
+  /**
    * Tâches que l'employé déclare terminées en pointant son départ.
    * Elles avancent dans LEUR workflow (donc passent en revue si le projet
    * l'exige, plutôt que d'être closes autoritairement) puis alimentent le
@@ -228,6 +234,11 @@ export class AttendanceService {
     });
 
     if (!attendance) {
+      throw new NotFoundException('Pointage non trouvé');
+    }
+
+    // On ne revele pas l'existence du pointage d'un tiers : meme message.
+    if (input.employeeId && attendance.employeeId !== input.employeeId) {
       throw new NotFoundException('Pointage non trouvé');
     }
 

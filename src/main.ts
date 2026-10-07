@@ -110,8 +110,12 @@ async function bootstrap() {
   });
 
   const port = Number(process.env.PORT ?? 3000);
-  await app.listen(port);
-  Logger.log(`Backend démarré sur le port ${port} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`, 'Bootstrap');
+  // SECURITE : en production on n'ecoute QUE sur la boucle locale. nginx est
+  // l'unique point d'entree et assure TLS. Sans cela le backend etait joignable
+  // en clair sur l'IP publique, court-circuitant HTTPS.
+  const host = process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0';
+  await app.listen(port, host);
+  Logger.log(`Backend démarré sur ${host}:${port} (NODE_ENV=${process.env.NODE_ENV ?? 'development'})`, 'Bootstrap');
 }
 
 bootstrap().catch((err) => {

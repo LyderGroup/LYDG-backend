@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ScheduleModule } from '@nestjs/schedule';
 import { Employee } from './employee.entity';
 import { EmployeeProfile } from './employee-profile.entity';
 import { Department } from '../departments/department.entity';
@@ -155,7 +154,6 @@ import { ProjectsModule } from '../projects/projects.module';
 
 @Module({
   imports: [
-    ScheduleModule.forRoot(),
     // Le pointage de départ fait avancer les tâches cochées dans leur
     // workflow (ProjectsService) avant de pré-remplir le rapport journalier.
     ProjectsModule,

@@ -91,6 +91,7 @@ export class AttendanceController {
     const tenant = req.tenant as { id?: string } | undefined;
     return this.attendanceService.checkOut({
       attendanceId: body.attendanceId,
+      employeeId: req.user?.employeeId ? String(req.user.employeeId) : undefined,
       completedTaskIds: body.completedTaskIds,
       latitude: body.latitude,
       longitude: body.longitude,

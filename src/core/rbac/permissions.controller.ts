@@ -6,10 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Permission } from './permission.entity';
+import { PermissionGuard } from './permission.guard';
+import { RequirePermission } from './require-permission.decorator';
+import { GLOBAL_PERMISSIONS } from '../global/global.permissions';
 
 class CreatePermissionDto {
   code?: string | null;
@@ -27,7 +31,11 @@ class UpdatePermissionDto {
   isCrudAction?: boolean;
 }
 
+// Ce controleur manipule les DEFINITIONS de permissions : y toucher revient
+// a redefinir le modele de droits. Reserve aux administrateurs systeme.
 @Controller('core/rbac/permissions')
+@UseGuards(PermissionGuard)
+@RequirePermission(GLOBAL_PERMISSIONS.SYSTEM_ADMIN)
 export class PermissionsController {
   constructor(
     @InjectRepository(Permission)

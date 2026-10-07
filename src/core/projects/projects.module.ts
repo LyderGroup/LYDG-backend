@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ScheduleModule } from '@nestjs/schedule';
 import { Organization } from '../organizations/organizations.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { Role } from '../rbac/role.entity';
@@ -37,7 +36,6 @@ import { ProjectsRealtimeService } from './projects-realtime.service';
 
 @Module({
   imports: [
-    ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       Project,
       Task,

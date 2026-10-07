@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -59,6 +60,10 @@ function buildSslConfig(configService: ConfigService, isProd: boolean) {
       isGlobal: true,
     }),
     EventEmitterModule.forRoot(),
+    // UN SEUL forRoot() pour toute l'application : il etait appele dans
+    // academy, hr et projects, ce qui enregistrait 3 planificateurs et
+    // declenchait CHAQUE @Cron trois fois.
+    ScheduleModule.forRoot(),
     // Rate limiting global :
     // - 30 req/sec en burst (anti-flood)
     // - 200 req/min (usage normal)

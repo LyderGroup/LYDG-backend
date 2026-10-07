@@ -211,6 +211,7 @@ export class RbacController {
   }
 
   @Post('seed-permissions-dev')
+  @RequirePermission(GLOBAL_PERMISSIONS.SYSTEM_ADMIN)
   async seedAllPermissionsDev() {
     const result = await this.permissionSeederService.seedAllPermissions();
     return {

@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ScheduleModule } from '@nestjs/schedule';
 import { RbacModule } from '../rbac/rbac.module';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
@@ -27,7 +26,6 @@ import {
     AuthModule,
     UsersModule,
     RbacModule,
-    ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       Course,
       CourseCategory,

@@ -126,7 +126,7 @@ export class UsersService {
       });
     }
 
-    qb.orderBy('u.created_at', 'DESC')
+    qb.orderBy('u.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -244,7 +244,14 @@ export class UsersService {
       // et les roles tenant sont semes pour CHAQUE organisation. Sans ce
       // filtre, on pourrait attribuer le role d'un autre tenant.
       const baseRole = await manager.getRepository(Role).findOne({
-        where: { code: DEFAULT_COLLABORATOR_ROLE_CODE, organizationId },
+        where: {
+          code: DEFAULT_COLLABORATOR_ROLE_CODE,
+          organizationId,
+          // isActive obligatoire : rbac.service filtre sur r.is_active = true
+          // pour resoudre les permissions. Rattacher un role desactive
+          // n'accorderait aucun droit, en silence.
+          isActive: true,
+        },
       });
       if (baseRole && baseRole.id !== role.id) {
         await userRolesRepo.save(
@@ -440,11 +447,16 @@ export class UsersService {
     // Scope tenant obligatoire : chaque organisation possede sa propre ligne
     // COLLABORATEUR (UNIQUE(organization_id, code)).
     const baseRole = await this.rolesRepo.findOne({
-      where: { code: DEFAULT_COLLABORATOR_ROLE_CODE, organizationId },
+      where: {
+        code: DEFAULT_COLLABORATOR_ROLE_CODE,
+        organizationId,
+        // Voir ci-dessus : un role desactive n'accorde aucune permission.
+        isActive: true,
+      },
     });
     if (!baseRole) {
       this.logger.warn(
-        `Role ${DEFAULT_COLLABORATOR_ROLE_CODE} absent : socle non attribue a ${userId}`,
+        `Role ${DEFAULT_COLLABORATOR_ROLE_CODE} absent ou desactive pour l'organisation ${organizationId} : socle non attribue a ${userId}`,
       );
       return false;
     }
@@ -501,7 +513,14 @@ export class UsersService {
       // et les roles tenant sont semes pour CHAQUE organisation. Sans ce
       // filtre, on pourrait attribuer le role d'un autre tenant.
       const baseRole = await manager.getRepository(Role).findOne({
-        where: { code: DEFAULT_COLLABORATOR_ROLE_CODE, organizationId },
+        where: {
+          code: DEFAULT_COLLABORATOR_ROLE_CODE,
+          organizationId,
+          // isActive obligatoire : rbac.service filtre sur r.is_active = true
+          // pour resoudre les permissions. Rattacher un role desactive
+          // n'accorderait aucun droit, en silence.
+          isActive: true,
+        },
       });
 
       const toDeactivate = await userRolesRepo.find({

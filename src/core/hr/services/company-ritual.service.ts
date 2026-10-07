@@ -348,7 +348,7 @@ export class CompanyRitualService {
       .andWhere('o.occurrence_date <= :endDate', { endDate })
       .andWhere('o.status != :cancelled', { cancelled: RitualStatus.CANCELLED })
       .orderBy('o.occurrenceDate', 'ASC')
-      .addOrderBy('r.scheduled_time', 'ASC')
+      .addOrderBy('r.scheduledTime', 'ASC')
       .getMany();
 
     return occurrences.map(o => ({

@@ -45,7 +45,7 @@ CLAUDE.md
 # temp directory
 .temp
 .tmp
-
+.claude
 # Runtime data
 pids
 *.pid

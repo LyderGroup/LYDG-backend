@@ -508,7 +508,7 @@ export class HrService {
       );
     }
 
-    return qb.orderBy('e.last_name', 'ASC').take(100).getMany();
+    return qb.orderBy('e.lastName', 'ASC').take(100).getMany();
   }
 
   /**

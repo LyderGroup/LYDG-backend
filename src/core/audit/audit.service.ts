@@ -103,7 +103,7 @@ export class AuditService {
       .createQueryBuilder('a')
       .where('a.organization_id = :orgId', { orgId: organizationId })
       .andWhere('a.actor_user_id = :userId', { userId: actorUserId })
-      .orderBy('a.occurred_at', 'DESC')
+      .orderBy('a.occurredAt', 'DESC')
       .take(options?.limit ?? 200);
 
     if (options?.from) {

@@ -590,7 +590,7 @@ export class PilotageService {
       qb.andWhere('v.period_end <= :periodEnd', { periodEnd: normalizedFilters.periodEnd });
     }
 
-    qb.orderBy('v.period_start', 'DESC').addOrderBy('v.created_at', 'DESC');
+    qb.orderBy('v.periodStart', 'DESC').addOrderBy('v.createdAt', 'DESC');
     return qb.getMany();
   }
 

@@ -114,7 +114,7 @@ export class MeController {
       .andWhere('ur.is_active = true')
       .andWhere('(ur.expires_at IS NULL OR ur.expires_at > NOW())')
       .andWhere('role.is_active = true')
-      .orderBy('ur.assigned_at', 'DESC')
+      .orderBy('ur.assignedAt', 'DESC')
       .getMany();
 
     const matchingRole = (() => {

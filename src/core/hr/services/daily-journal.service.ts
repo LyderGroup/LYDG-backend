@@ -252,7 +252,7 @@ export class DailyJournalService {
     const query = this.repo
       .createQueryBuilder('dj')
       .where('dj.employee_id = :employeeId', { employeeId })
-      .orderBy('dj.journal_date', 'DESC');
+      .orderBy('dj.journalDate', 'DESC');
 
     if (startDate && endDate) {
       query.andWhere('dj.journal_date BETWEEN :startDate AND :endDate', {

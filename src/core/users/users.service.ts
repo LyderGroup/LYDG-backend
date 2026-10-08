@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -276,12 +276,20 @@ export class UsersService {
     return savedUser;
   }
 
+  /**
+   * @param organizationId cloisonnement multi-tenant. `null` le desactive, et
+   *   n'est legitime QUE pour le libre-service, ou `id` vient de `req.user.id`
+   *   et jamais du client. Un compte peut consulter une filiale autre que la
+   *   sienne : scoper l'ecriture sur l'organisation affichee ne mettait alors
+   *   a jour aucune ligne, en renvoyant malgre tout un HTTP 200.
+   */
   async updateForTenant(
-    organizationId: string,
+    organizationId: string | null,
     id: string,
     updatedBy: string | null,
     input: UpdateUserInput,
   ): Promise<User | null> {
+    const scope = organizationId ? { id, organizationId } : { id };
     const patch: Partial<User> = {};
 
     if (typeof input.firstName === 'string') {
@@ -307,7 +315,7 @@ export class UsersService {
     }
     if (input.department !== undefined) {
       // Récupérer le metadata existant en DB et merger
-      const existing = await this.usersRepo.findOne({ where: { id, organizationId } });
+      const existing = await this.usersRepo.findOne({ where: scope });
       const existingMetadata = (existing?.metadata as Record<string, any>) ?? {};
       patch.metadata = { ...existingMetadata, department: input.department } as any;
     }
@@ -321,12 +329,18 @@ export class UsersService {
     }
 
     if (Object.keys(patch).length === 0) {
-      return this.usersRepo.findOne({ where: { id, organizationId } });
+      return this.usersRepo.findOne({ where: scope });
     }
 
-    await this.usersRepo.update({ id, organizationId }, patch as any);
+    const result = await this.usersRepo.update(scope, patch as any);
 
-    return this.usersRepo.findOne({ where: { id, organizationId } });
+    // Un UPDATE sans correspondance renvoyait null avec un HTTP 200 : le client
+    // croyait avoir enregistre. On echoue explicitement.
+    if (!result.affected) {
+      throw new NotFoundException('Utilisateur introuvable dans ce contexte');
+    }
+
+    return this.usersRepo.findOne({ where: scope });
   }
 
   /**

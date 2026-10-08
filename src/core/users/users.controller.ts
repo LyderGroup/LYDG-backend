@@ -256,7 +256,10 @@ export class UsersController {
     }
 
     return this.usersService.updateForTenant(
-      tenant?.id as string,
+      // Libre-service : l'identite vient du jeton, jamais du client. On ne
+      // cloisonne donc PAS sur l'organisation affichee, qui peut differer de
+      // celle du compte pour un porteur de role multi-filiales.
+      null,
       currentUser.id,
       (currentUser?.id as string) ?? null,
       {

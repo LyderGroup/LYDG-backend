@@ -34,7 +34,6 @@ export class MeController {
       order: { assignedAt: 'DESC' },
     });
 
-    // Plus de rôle système - vérifier la permission hr.organizations.read.all
     const hasAllOrgsPermission = userRoles.some((ur) =>
       ur.role?.rolePermissions?.some((rp: any) => rp.permission?.code === 'hr.organizations.read.all')
     );

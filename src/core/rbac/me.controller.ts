@@ -78,7 +78,18 @@ export class MeController {
       }
     }
 
-    return Array.from(organizationsMap.values());
+    // La filiale D'ORIGINE du compte (users.organization_id) passe en tete et
+    // est marquee `isHome`. Un porteur de hr.organizations.read.all voit les 6
+    // filiales : sans ce repere, le client ouvrait sur la premiere de la liste
+    // (triee par date de creation), rarement la sienne.
+    const all = Array.from(organizationsMap.values()).map((org: any) => ({
+      ...org,
+      isHome: org.id === currentUser.organizationId,
+    }));
+
+    all.sort((a: any, b: any) => Number(b.isHome) - Number(a.isHome));
+
+    return all;
   }
 
   @Get('profile')

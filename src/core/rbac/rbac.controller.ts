@@ -182,7 +182,9 @@ export class RbacController {
       return [];
     }
 
-    return this.rbacManagementService.getUserPermissions(userId, organizationId);
+    // Chaque permission porte son module : le client en deduit les modules
+    // visibles. Le hook usePermissions accepte deja chaines et objets.
+    return this.rbacManagementService.getUserPermissionsWithModule(userId, organizationId);
   }
 
   @Get('my/roles')

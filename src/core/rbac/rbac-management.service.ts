@@ -602,6 +602,41 @@ export class RbacManagementService {
     return userRoles.map((ur) => ur.role);
   }
 
+  /**
+   * Comme getUserPermissions, mais chaque entree porte son `systemModuleCode`.
+   *
+   * C'est ce qui permet au client de deduire les modules accessibles SANS
+   * table de correspondance codee en dur : un module est visible des lors que
+   * l'utilisateur detient au moins une de ses permissions. Ajouter un module
+   * ou un sous-module ne demande donc aucune modification de code.
+   */
+  async getUserPermissionsWithModule(
+    userId: string,
+    organizationId?: string,
+  ): Promise<Array<{ code: string; systemModuleCode: string | null }>> {
+    const qb = this.userRolesRepo
+      .createQueryBuilder('ur')
+      .innerJoin('ur.role', 'r')
+      .innerJoin('r.rolePermissions', 'rp')
+      .innerJoin('rp.permission', 'p')
+      .where('ur.userId = :userId', { userId })
+      .andWhere('ur.isActive = true')
+      .andWhere('(ur.expiresAt IS NULL OR ur.expiresAt > NOW())')
+      .andWhere('r.isActive = true')
+      .select('p.code', 'code')
+      .addSelect('p.system_module_code', 'systemModuleCode')
+      .distinct(true);
+
+    if (organizationId) {
+      qb.andWhere('(r.organizationId = :organizationId OR r.organizationId IS NULL)', { organizationId });
+    } else {
+      qb.andWhere('r.organizationId IS NULL');
+    }
+
+    const rows = await qb.getRawMany<{ code: string; systemModuleCode: string | null }>();
+    return rows.filter((r) => !!r.code);
+  }
+
   async getUserPermissions(userId: string, organizationId?: string): Promise<string[]> {
     const qb = this.userRolesRepo
       .createQueryBuilder('ur')

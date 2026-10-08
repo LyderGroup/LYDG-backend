@@ -12,6 +12,7 @@ import { OrganizationModule } from '../modules/organization-module.entity';
 import { Employee } from '../hr/employee.entity';
 import { RbacService } from './rbac.service';
 import { RbacManagementService } from './rbac-management.service';
+import { RbacRealtimeService } from './rbac-realtime.service';
 import { PermissionSeederService } from './permission.seeder.service';
 import { RolesGuard } from './roles.guard';
 import { PermissionGuard } from './permission.guard';
@@ -51,7 +52,7 @@ const controllers = isProd ? baseControllers : [...baseControllers, RbacDevContr
     ]),
   ],
   controllers,
-  providers: [RbacService, RbacManagementService, PermissionSeederService, RolesGuard, PermissionGuard],
+  providers: [RbacService, RbacManagementService, RbacRealtimeService, PermissionSeederService, RolesGuard, PermissionGuard],
   exports: [RbacService, RbacManagementService, PermissionSeederService, RolesGuard, PermissionGuard, TypeOrmModule],
 })
 export class RbacModule { }

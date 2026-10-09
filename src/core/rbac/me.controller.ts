@@ -39,10 +39,14 @@ export class MeController {
     );
 
     if (hasAllOrgsPermission) {
-      return this.organizationsRepo.find({
+      const every = await this.organizationsRepo.find({
         order: { createdAt: 'DESC' },
         take: 500,
       });
+      // Ce retour anticipe sautait le marquage isHome : un porteur de
+      // hr.organizations.read.all recevait les 6 filiales sans savoir
+      // laquelle etait la sienne, et le client ouvrait sur la premiere.
+      return this.markHomeFirst(every, currentUser.organizationId);
     }
 
     const organizationsMap = new Map<string, any>();
@@ -78,18 +82,24 @@ export class MeController {
       }
     }
 
-    // La filiale D'ORIGINE du compte (users.organization_id) passe en tete et
-    // est marquee `isHome`. Un porteur de hr.organizations.read.all voit les 6
-    // filiales : sans ce repere, le client ouvrait sur la premiere de la liste
-    // (triee par date de creation), rarement la sienne.
-    const all = Array.from(organizationsMap.values()).map((org: any) => ({
+    return this.markHomeFirst(
+      Array.from(organizationsMap.values()),
+      currentUser.organizationId,
+    );
+  }
+
+  /**
+   * Marque la filiale D'ORIGINE du compte (`users.organization_id`) et la place
+   * en tete. Sans ce repere, le client ouvrait sur la premiere filiale de la
+   * liste — triee par date de creation, donc rarement la bonne.
+   */
+  private markHomeFirst(orgs: any[], homeOrganizationId?: string | null): any[] {
+    const marked = orgs.map((org: any) => ({
       ...org,
-      isHome: org.id === currentUser.organizationId,
+      isHome: !!homeOrganizationId && org.id === homeOrganizationId,
     }));
-
-    all.sort((a: any, b: any) => Number(b.isHome) - Number(a.isHome));
-
-    return all;
+    marked.sort((a, b) => Number(b.isHome) - Number(a.isHome));
+    return marked;
   }
 
   @Get('profile')

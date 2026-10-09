@@ -2461,16 +2461,30 @@ export class ProjectsService {
       };
     }
 
+    // La verite est dans validation_requests, pas dans le statut de la tache :
+    // une tache soumise a validation reste souvent en 'completed' le temps que
+    // le valideur tranche. Se fier au seul statut vidait l'onglet Validation et
+    // classait ces taches en "Termine" alors que rien n'etait encore valide.
+    const PENDING_REQUEST_EXISTS = `EXISTS (
+      SELECT 1 FROM module_b_projects.validation_requests vr
+      WHERE vr.task_id = t.id
+        AND vr.status = 'pending'
+        AND vr.deleted_at IS NULL
+    )`;
+
     if (bucket === 'pending_validation') {
       return {
-        sql: "t.status IN ('review','revision')",
+        sql: `(${PENDING_REQUEST_EXISTS} OR t.status IN ('review','revision'))`,
         params: {},
       };
     }
 
     if (bucket === 'completed') {
+      // Exclusion explicite : sans elle une tache en attente apparaitrait dans
+      // les deux lots a la fois.
       return {
-        sql: "(t.completed_at IS NOT NULL OR t.status IN ('completed','approved'))",
+        sql: `(t.completed_at IS NOT NULL OR t.status IN ('completed','approved'))
+              AND NOT ${PENDING_REQUEST_EXISTS}`,
         params: {},
       };
     }
@@ -2649,12 +2663,24 @@ export class ProjectsService {
       orgNameById.set(o.id, { name: o.name, nameCode: o.nameCode ?? null });
     }
 
+    // Qui doit valider ? L'etape de workflow ne designe pas une personne mais
+    // une REGLE (`validator_role`, ex. MANAGER_OR_OWNER). On la resout ici vers
+    // un nom reel, sinon l'interface ne peut afficher qu'un code technique.
+    const pendingValidatorByTaskId = await this.resolvePendingValidators(
+      rows.map((t) => t.id),
+    );
+
     return rows.map((t) => {
       const assigneeName = t.assignee
         ? `${t.assignee.firstName} ${t.assignee.lastName}`.trim()
         : null;
       const org = orgNameById.get(t.organizationId);
+      const pendingValidator = pendingValidatorByTaskId.get(t.id) ?? null;
       return {
+        awaitingValidation: !!pendingValidator,
+        validatorName: pendingValidator?.name ?? null,
+        validatorRule: pendingValidator?.rule ?? null,
+        validationStepName: pendingValidator?.stepName ?? null,
         id: t.id,
         organizationId: t.organizationId,
         organizationName: org?.name ?? null,
@@ -2674,6 +2700,56 @@ export class ProjectsService {
     });
   }
 
+
+  /**
+   * Pour chaque tache ayant une demande de validation EN ATTENTE, resout le
+   * valideur attendu.
+   *
+   * `project_workflow_steps.validator_role` porte une regle, pas un
+   * identifiant : MANAGER_OR_OWNER signifie "le responsable du projet, a
+   * defaut son createur". On fait la resolution en SQL pour eviter N requetes.
+   */
+  private async resolvePendingValidators(
+    taskIds: string[],
+  ): Promise<Map<string, { name: string | null; rule: string | null; stepName: string | null }>> {
+    const out = new Map<string, { name: string | null; rule: string | null; stepName: string | null }>();
+    if (!taskIds.length) return out;
+
+    try {
+      const rows = (await this.projectsRepo.manager.query(
+        `
+        SELECT
+          vr.task_id,
+          pws.name AS step_name,
+          pws.validator_role AS rule,
+          TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS validator_name
+        FROM module_b_projects.validation_requests vr
+        JOIN module_b_projects.tasks t ON t.id = vr.task_id
+        LEFT JOIN module_b_projects.project_workflow_steps pws ON pws.id = vr.step_id
+        LEFT JOIN module_b_projects.projects p ON p.id = t.project_id
+        LEFT JOIN core.users u
+          ON u.id = COALESCE(p.manager_id, p.created_by)
+        WHERE vr.task_id = ANY($1::uuid[])
+          AND vr.status = 'pending'
+          AND vr.deleted_at IS NULL
+        `,
+        [taskIds],
+      )) as Array<{ task_id: string; step_name: string | null; rule: string | null; validator_name: string | null }>;
+
+      for (const r of rows) {
+        out.set(String(r.task_id), {
+          name: r.validator_name?.trim() ? r.validator_name.trim() : null,
+          rule: r.rule ?? null,
+          stepName: r.step_name ?? null,
+        });
+      }
+    } catch (err) {
+      // Un echec ici ne doit pas priver l'utilisateur de sa liste de taches.
+      this.logger.warn(`resolvePendingValidators: ${(err as Error).message}`);
+    }
+
+    return out;
+  }
 
   async updateTaskAssignee(input: {
     taskId: string;

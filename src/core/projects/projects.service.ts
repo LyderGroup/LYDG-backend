@@ -177,6 +177,7 @@ export class ProjectsService {
   private async assertProjectReadableOrThrow(input: {
     projectId: string;
     userId: string;
+    contextOrganizationId?: string | null;
   }): Promise<{ projectId: string; organizationId: string }> {
     const rows = (await this.projectsRepo.manager.query(
       `
@@ -191,7 +192,7 @@ export class ProjectsService {
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
           AND r.is_active = true
           AND p.code = ANY($4::text[])
-        AND r.organization_id = $3
+          AND ($3::uuid IS NULL OR r.organization_id = $3 OR r.organization_id IS NULL)
       LIMIT 1
       )
       SELECT p.id AS project_id, p.organization_id AS organization_id
@@ -216,11 +217,18 @@ export class ProjectsService {
         )
       LIMIT 1
       `,
-      // NB : $3 (organization_id) volontairement null ici — la query a été
-      // historiquement écrite pour désactiver le check admin scope tenant
-      // (à corriger dans un sprint séparé). $4 reçoit la liste des codes
-      // legacy reconnus comme "lecture globale" via la constante centrale.
-      [input.projectId, input.userId, null, LEGACY_READ_ALL_CODES],
+      // $3 valait `null` : en SQL toute comparaison avec NULL est fausse, donc
+      // la CTE user_admin ne remontait JAMAIS et le contournement
+      // administrateur etait mort. Un porteur de "lecture globale" recevait un
+      // 403 sur tout projet dont il n'etait ni membre ni createur.
+      // La condition accepte desormais le role de l'organisation courante ET
+      // les roles globaux (organization_id IS NULL).
+      [
+        input.projectId,
+        input.userId,
+        input.contextOrganizationId ?? null,
+        LEGACY_READ_ALL_CODES,
+      ],
     )) as Array<{ project_id?: string; organization_id?: string }>;
 
     const first = rows[0];
@@ -280,7 +288,11 @@ export class ProjectsService {
     contextOrganizationId: string;
     permissionCodes: string[];
   }) {
-    await this.assertProjectReadableOrThrow({ projectId: input.projectId, userId: input.userId });
+    await this.assertProjectReadableOrThrow({
+      projectId: input.projectId,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+    });
 
     const rows = await this.projectCommentsRepo
       .createQueryBuilder('c')
@@ -321,7 +333,11 @@ export class ProjectsService {
       content: string;
     };
   }) {
-    await this.assertProjectReadableOrThrow({ projectId: input.projectId, userId: input.userId });
+    await this.assertProjectReadableOrThrow({
+      projectId: input.projectId,
+      userId: input.userId,
+      contextOrganizationId: input.contextOrganizationId,
+    });
 
     return this.projectCommentService.createProjectComment({
       projectId: input.projectId,

@@ -2695,6 +2695,9 @@ export class ProjectsService {
         progress: t.progress,
         assigneeId: t.assigneeId,
         assigneeName,
+        // Permet au client de distinguer "mes taches" de "les taches que
+        // J'AI attribuees a quelqu'un d'autre", sans requete supplementaire.
+        createdById: t.createdBy ?? null,
         updatedAt: t.updatedAt,
       };
     });

@@ -7,6 +7,7 @@ import { Organization } from '../organizations/organizations.entity';
 import { UsersService } from '../users/users.service';
 import { LeaveDeductionHistory, DeductionAbsenceType } from './entities/leave-deduction-history.entity';
 import { InAppNotificationService } from '../notifications/in-app-notification.service';
+import { ANNUAL_LEAVE_DAYS, MAX_LEAVE_DAYS_PER_REQUEST } from './leave.constants';
 
 interface CreateEmployeeInput {
   userId?: string | null;
@@ -769,7 +770,10 @@ export class HrService {
     const yearStart = `${targetYear}-01-01`;
     const yearEnd = `${targetYear}-12-31`;
 
-    const annualLeaveDays = employee.annualLeaveDays ?? 0;
+    // Droit annuel uniforme : la colonne annual_leave_days etait vide pour la
+    // plupart des fiches (solde calcule sur 0) et aberrante pour d'autres
+    // (220, 300 jours). La regle prime desormais sur la saisie.
+    const annualLeaveDays = ANNUAL_LEAVE_DAYS;
 
     // Calcul dynamique de la journée de travail : différence entre
     // workEndTime et workStartTime de l'employé. Fallback 8h si l'horaire

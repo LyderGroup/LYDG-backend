@@ -5,6 +5,7 @@ import { LeaveRequest, LeaveRequestStatus } from '../entities/leave-request.enti
 import { Employee } from '../employee.entity';
 import { LeaveType } from '../entities/leave-type.entity';
 import { HR_PERMISSIONS } from '../hr.permissions';
+import { ANNUAL_LEAVE_DAYS, MAX_LEAVE_DAYS_PER_REQUEST } from '../leave.constants';
 
 export interface LeaveRequestUserContext {
   employeeId?: string;
@@ -188,6 +189,47 @@ export class LeaveRequestService {
     }
   }
 
+  /**
+   * Deux plafonds :
+   *   - 7 jours par demande : prendre ses 30 jours d'un bloc desorganise
+   *     l'equipe, il faut fractionner ;
+   *   - 30 jours cumules sur l'annee civile, demandes en attente comprises —
+   *     sinon on pourrait en deposer dix de 7 jours le meme jour.
+   */
+  private async assertLeaveVolumePolicy(input: CreateWithCodeInput): Promise<void> {
+    const requested = Number(input.totalDays ?? 0);
+
+    if (requested > MAX_LEAVE_DAYS_PER_REQUEST) {
+      throw new BadRequestException(
+        `Une demande ne peut excéder ${MAX_LEAVE_DAYS_PER_REQUEST} jours consécutifs. `
+        + `Fractionnez votre congé en plusieurs demandes.`,
+      );
+    }
+
+    const year = new Date(input.startDate).getFullYear();
+    const rows = (await this.repo.manager.query(
+      `
+      SELECT COALESCE(SUM(total_days), 0)::float AS used
+      FROM module_c_rh.leave_requests
+      WHERE employee_id = $1
+        AND status IN ('pending', 'approved')
+        AND deleted_at IS NULL
+        AND EXTRACT(YEAR FROM start_date) = $2
+      `,
+      [input.employeeId, year],
+    )) as Array<{ used: number }>;
+
+    const already = Number(rows?.[0]?.used ?? 0);
+    if (already + requested > ANNUAL_LEAVE_DAYS) {
+      const left = Math.max(0, ANNUAL_LEAVE_DAYS - already);
+      throw new BadRequestException(
+        `Droit annuel de ${ANNUAL_LEAVE_DAYS} jours dépassé : `
+        + `il vous reste ${left} jour(s) pour ${year} `
+        + `(${already} déjà demandés ou accordés).`,
+      );
+    }
+  }
+
   async create(input: CreateLeaveRequestInput) {
     const entity = this.repo.create({
       employeeId: input.employeeId,
@@ -214,6 +256,10 @@ export class LeaveRequestService {
    * Lève BadRequestException si la règle est enfreinte.
    */
   private async assertLeaveRequestPolicy(input: CreateWithCodeInput): Promise<void> {
+    // Regles de volume, appliquees AVANT le cas Joker : elles valent pour
+    // toute demande, quel qu'en soit le type.
+    await this.assertLeaveVolumePolicy(input);
+
     if (input.isJoker) {
       const usage = await this.getJokerUsage(input.employeeId);
       if (usage.usedCount >= usage.maxCount) {

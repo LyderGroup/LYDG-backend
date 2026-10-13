@@ -284,36 +284,21 @@ export class ProjectsLookupsController {
       throw new UnauthorizedException('Missing authenticated user');
     }
 
-    try {
-      const rhRows = (await this.dataSource.query(
-        `
-        SELECT d.id, d.name, d.code
-        FROM module_c_rh.departments d
-        WHERE d.organization_id = $1 AND d.is_active = true
-        ORDER BY d.name ASC
-        LIMIT 500
-        `,
-        [tenant.id],
-      )) as Array<{ id: string; name: string; code: string }>;
-
-      if (rhRows.length > 0) {
-        return rhRows;
-      }
-    } catch {
-    }
-
-    const coreRows = (await this.dataSource.query(
+    // Meme source unique que la route par organisation : core.departments.
+    const rows = (await this.dataSource.query(
       `
       SELECT d.id, d.name, d.code
       FROM core.departments d
-      WHERE d.organization_id = $1 AND d.is_active = true
+      WHERE d.organization_id = $1
+        AND d.is_active = true
+        AND d.deleted_at IS NULL
       ORDER BY d.name ASC
       LIMIT 500
       `,
       [tenant.id],
     )) as Array<{ id: string; name: string; code: string }>;
 
-    return coreRows;
+    return rows;
   }
 
   @Get('organizations')
@@ -357,36 +342,26 @@ export class ProjectsLookupsController {
       throw new BadRequestException('Organization not accessible');
     }
 
-    try {
-      const rhRows = (await this.dataSource.query(
-        `
-        SELECT d.id, d.name, d.code
-        FROM module_c_rh.departments d
-        WHERE d.organization_id = $1 AND d.is_active = true
-        ORDER BY d.name ASC
-        LIMIT 500
-        `,
-        [organizationId.trim()],
-      )) as Array<{ id: string; name: string; code: string }>;
-
-      if (rhRows.length > 0) {
-        return rhRows;
-      }
-    } catch {
-    }
-
-    const coreRows = (await this.dataSource.query(
+    // Source unique : core.departments, celle que gere l'interface
+    // d'administration. On interrogeait module_c_rh.departments en premier et,
+    // des qu'elle renvoyait une ligne, on s'arretait la — cette table
+    // historique n'en contenait que 2, ce qui masquait les departements crees
+    // depuis l'administration. Les cles etrangeres du module Projets pointent
+    // desormais sur core.departments (migration 2026-10-13).
+    const rows = (await this.dataSource.query(
       `
       SELECT d.id, d.name, d.code
       FROM core.departments d
-      WHERE d.organization_id = $1 AND d.is_active = true
+      WHERE d.organization_id = $1
+        AND d.is_active = true
+        AND d.deleted_at IS NULL
       ORDER BY d.name ASC
       LIMIT 500
       `,
       [organizationId.trim()],
     )) as Array<{ id: string; name: string; code: string }>;
 
-    return coreRows;
+    return rows;
   }
 
   @Get('organizations/:id/users')
@@ -1083,7 +1058,9 @@ export class ProjectsLookupsController {
         ORDER BY e0.created_at DESC
         LIMIT 1
       ) e ON true
-      LEFT JOIN module_c_rh.departments d
+      -- employees.department_id pointe sur core.departments : joindre la table
+      -- historique ne resolvait le nom que pour 2 departements sur 6.
+      LEFT JOIN core.departments d
         ON d.id = COALESCE(e.department_id, NULLIF(TRIM(u.metadata->>'department'), '')::uuid)
       LEFT JOIN module_b_projects.tasks t
         ON t.project_id = pm.project_id

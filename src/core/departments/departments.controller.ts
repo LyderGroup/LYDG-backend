@@ -20,9 +20,10 @@ import { SYSTEM_PERMISSIONS } from '../global/global.permissions';
 class CreateDepartmentDto {
   @IsString()
   name!: string;
-
+  /** Facultatif : derive du nom quand il n'est pas fourni. */
   @IsString()
-  code!: string;
+  @IsOptional()
+  code?: string;
 
   @IsString()
   @IsOptional()

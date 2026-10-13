@@ -75,16 +75,56 @@ export class DepartmentsService {
     };
   }
 
+  /**
+   * Derive un code depuis le nom : majuscules, accents retires, non
+   * alphanumeriques remplaces par un tiret.
+   *   "Vidéaste mobile" -> "VIDEASTE-MOBILE"
+   */
+  private slugify(name: string): string {
+    return (name ?? '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'DEPT';
+  }
+
+  /**
+   * Code unique au sein de l'organisation. `uq_departments_org_code` impose
+   * l'unicite : sans suffixe, creer deux departements de noms proches
+   * echouerait sur une violation de contrainte incomprehensible pour
+   * l'utilisateur.
+   */
+  private async generateCode(organizationId: string, name: string): Promise<string> {
+    const base = this.slugify(name);
+    for (let i = 0; i < 50; i++) {
+      const candidate = i === 0 ? base : `${base}-${i + 1}`;
+      const existing = await this.departmentsRepo.findOne({
+        where: { organizationId, code: candidate } as any,
+      });
+      if (!existing) return candidate;
+    }
+    return `${base}-${Date.now().toString().slice(-5)}`;
+  }
+
   async createForTenant(
     organizationId: string,
     createdBy: string | null,
     input: CreateDepartmentInput,
   ) {
+    // Le code n'est plus saisi : il se deduit du nom. Un champ technique
+    // demande a l'utilisateur une information qu'il ne maitrise pas, et une
+    // collision produisait une erreur de contrainte brute.
+    const code = input.code?.trim()
+      ? input.code.trim()
+      : await this.generateCode(organizationId, input.name);
+
     const department = this.departmentsRepo.create({
       organizationId,
       parentDepartmentId: input.parentDepartmentId ?? null,
       name: input.name,
-      code: input.code,
+      code,
       description: input.description ?? null,
       createdBy: createdBy ?? null,
     });

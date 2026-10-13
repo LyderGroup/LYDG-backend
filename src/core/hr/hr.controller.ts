@@ -18,6 +18,7 @@ import { OvertimeService } from './services/overtime.service';
 import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { HR_PERMISSIONS } from './hr.permissions';
+import { EMPLOYMENT_TYPES, CONTRACT_TYPES } from './employment.constants';
 
 class CreateEmployeeDto {
   /**
@@ -38,8 +39,10 @@ class CreateEmployeeDto {
   @IsOptional() @IsString() socialSecurityNumber?: string | null;
   @IsOptional() @IsString() taxId?: string | null;
   @IsOptional() @IsString() jobTitle?: string | null;
-  @IsOptional() @IsString() employmentType?: string | null;
-  @IsOptional() @IsString() contractType?: string | null;
+  @IsOptional() @IsIn(EMPLOYMENT_TYPES as unknown as string[])
+  employmentType?: string | null;
+  @IsOptional() @IsIn(CONTRACT_TYPES as unknown as string[])
+  contractType?: string | null;
   @IsDateString() contractStartDate!: string;
   @IsOptional() @IsDateString() contractEndDate?: string | null;
   @IsOptional() @IsDateString() probationEndDate?: string | null;
@@ -82,8 +85,10 @@ class UpdateEmployeeDto {
   @IsOptional() @IsString() socialSecurityNumber?: string | null;
   @IsOptional() @IsString() taxId?: string | null;
   @IsOptional() @IsString() jobTitle?: string | null;
-  @IsOptional() @IsString() employmentType?: string | null;
-  @IsOptional() @IsString() contractType?: string | null;
+  @IsOptional() @IsIn(EMPLOYMENT_TYPES as unknown as string[])
+  employmentType?: string | null;
+  @IsOptional() @IsIn(CONTRACT_TYPES as unknown as string[])
+  contractType?: string | null;
   @IsOptional() @IsDateString() contractStartDate?: string;
   @IsOptional() @IsDateString() contractEndDate?: string | null;
   @IsOptional() @IsDateString() probationEndDate?: string | null;

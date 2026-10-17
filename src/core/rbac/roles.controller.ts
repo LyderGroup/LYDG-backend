@@ -115,15 +115,21 @@ export class RolesController {
       take: limit,
     };
 
+    // Les roles GLOBAUX (organization_id NULL) valent dans toutes les
+    // filiales. Filtrer uniquement sur l'organisation courante les rendait
+    // invisibles partout, donc impossibles a attribuer depuis l'interface.
     const whereConditions: any = {};
-
-    if (orgId) {
-      whereConditions.organizationId = orgId;
-    }
 
     if (!includeInactive) {
       whereConditions.isActive = true;
     }
+
+    const whereClause: any = orgId
+      ? [
+          { ...whereConditions, organizationId: orgId },
+          { ...whereConditions, organizationId: IsNull() },
+        ]
+      : whereConditions;
 
     // Pour la recherche, on doit utiliser QueryBuilder
     if (search) {
@@ -132,7 +138,8 @@ export class RolesController {
         .leftJoinAndSelect('rp.permission', 'p');
 
       if (orgId) {
-        qb.where('r.organizationId = :orgId', { orgId });
+        // Idem pour la recherche : filiale courante OU role global.
+        qb.where('(r.organizationId = :orgId OR r.organizationId IS NULL)', { orgId });
       } else {
         qb.where('1 = 1');
       }
@@ -165,7 +172,7 @@ export class RolesController {
       };
     }
 
-    findOptions.where = Object.keys(whereConditions).length > 0 ? whereConditions : undefined;
+    findOptions.where = whereClause;
 
     const [items, total] = await this.rolesRepo.findAndCount(findOptions);
 

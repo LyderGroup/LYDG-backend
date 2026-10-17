@@ -1,6 +1,6 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, IsNull } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { IsString, IsOptional, IsBoolean, IsNumber, IsArray, IsUUID, IsDateString } from 'class-validator';
 import { Role } from './role.entity';
@@ -537,12 +537,40 @@ export class RbacManagementService {
     dto: AssignRoleToUserDto,
     assignedBy: string,
   ): Promise<UserRole> {
+    // Un role GLOBAL (organization_id NULL) est attribuable depuis n'importe
+    // quelle filiale : le chercher uniquement dans l'organisation courante le
+    // rendait introuvable, donc impossible a donner.
     const role = await this.rolesRepo.findOne({
-      where: { id: dto.roleId, organizationId },
+      where: [
+        { id: dto.roleId, organizationId },
+        { id: dto.roleId, organizationId: IsNull() },
+      ],
     });
 
     if (!role) {
       throw new NotFoundException('Rôle non trouvé');
+    }
+
+    // Un role global vaut dans TOUTES les filiales, presentes et futures.
+    // On exige donc que celui qui l'attribue en detienne deja un : sinon un
+    // administrateur limite a une filiale pourrait se fabriquer, ou fabriquer
+    // a autrui, un acces a l'ensemble de l'organisation.
+    if (!role.organizationId) {
+      const grantedByGlobal = await this.userRolesRepo
+        .createQueryBuilder('ur')
+        .innerJoin('ur.role', 'r')
+        .where('ur.userId = :assignedBy', { assignedBy })
+        .andWhere('ur.isActive = true')
+        .andWhere('r.isActive = true')
+        .andWhere('r.organizationId IS NULL')
+        .getCount();
+
+      if (grantedByGlobal === 0) {
+        throw new ForbiddenException(
+          `Le rôle « ${role.name} » est global : il donne accès à toutes les `
+          + `filiales. Seul un porteur de rôle global peut l'attribuer.`,
+        );
+      }
     }
 
     // Vérifier si l'utilisateur a déjà ce rôle

@@ -1141,11 +1141,18 @@ export class ProjectsService {
     }
 
     for (const d of deptPairs) {
+      // core.departments : la table que gere l'administration et vers laquelle
+      // pointent les cles etrangeres du module Projets depuis la migration du
+      // 2026-10-13. L'ancienne table n'en contenait que 2 : tout departement
+      // cree depuis l'administration etait rejete comme "invalide".
       const rows = (await this.projectsRepo.manager.query(
         `
         SELECT d.id AS id
-        FROM module_c_rh.departments d
-        WHERE d.id = $1 AND d.organization_id = $2
+        FROM core.departments d
+        WHERE d.id = $1
+          AND d.organization_id = $2
+          AND d.is_active = true
+          AND d.deleted_at IS NULL
         LIMIT 1
         `,
         [d.departmentId, d.organizationId],

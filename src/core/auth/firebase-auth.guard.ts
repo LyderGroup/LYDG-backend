@@ -16,6 +16,7 @@ import { User } from '../users/user.entity';
 import { LoginHistory } from '../users/login-history.entity';
 import { Employee } from '../hr/employee.entity';
 import { UserDeviceService } from './user-device.service';
+import { OnEvent } from '@nestjs/event-emitter';
 
 interface CachedUserContext {
   expiresAt: number;
@@ -237,6 +238,18 @@ export class FirebaseAuthGuard implements CanActivate {
       );
     }
 
+    // Un compte desactive ou supprime ne doit plus ouvrir de session : aucune
+    // verification n'existait. On se fonde sur `isActive` SEUL. `deletedAt`
+    // n'est pas fiable — des comptes actifs portent une date de suppression
+    // perimee (supprimes puis reactives sans remise a zero). Toute desactivation
+    // ou suppression passe par isActive = false.
+    if (!user.isActive) {
+      this.logger.warn(`[auth] connexion refusée, compte inactif (${email ?? user.id})`);
+      throw new UnauthorizedException(
+        "Ce compte n'a plus accès à la plateforme. Contactez votre administrateur.",
+      );
+    }
+
     // 3) Update login_count atomiquement (UPDATE … = login_count + 1)
     //    et historique : sur premier hit du cache (donc ~ par session).
     const ipAddress =
@@ -331,6 +344,15 @@ export class FirebaseAuthGuard implements CanActivate {
   /**
    * Invalide le cache utilisateur (à appeler en cas de changement de profil).
    */
+  /**
+   * Compte desactive, supprime ou restaure : on purge le cache pour que la
+   * decision prenne effet immediatement, et non au bout des 5 minutes de TTL.
+   */
+  @OnEvent('user.access.changed')
+  onUserAccessChanged(payload: { externalId?: string | null }): void {
+    if (payload?.externalId) this.invalidateUserCache(payload.externalId);
+  }
+
   invalidateUserCache(externalId: string): void {
     this.userCache.delete(externalId);
   }

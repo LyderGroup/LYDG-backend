@@ -9,6 +9,7 @@ import { User } from './user.entity';
 import { LoginHistory } from './login-history.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { Role } from '../rbac/role.entity';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 interface ListUsersOptions {
   page?: number;
   limit?: number;
@@ -54,6 +55,7 @@ export class UsersService {
     private readonly userRolesRepo: Repository<UserRole>,
     @InjectRepository(Role)
     private readonly rolesRepo: Repository<Role>,
+    private readonly eventEmitter: EventEmitter2,
   ) { }
 
   private ensureFirebaseApp(): void {
@@ -171,6 +173,36 @@ export class UsersService {
       throw new BadRequestException('Le département est obligatoire');
     }
 
+    // Rajouter une personne dont le compte a ete supprime la RESTAURE avec son
+    // historique, au lieu de creer un doublon vierge. Aucune unicite n'existe
+    // sur l'email (seul un index filtre sur deleted_at IS NULL) : sans ce
+    // controle, l'ancien compte restait enterre a cote du nouveau.
+    const previous = await this.usersRepo
+      .createQueryBuilder('u')
+      .where('LOWER(u.email) = LOWER(:email)', { email: payload.email.trim() })
+      .andWhere('u.organizationId = :organizationId', { organizationId })
+      .andWhere('(u.deletedAt IS NOT NULL OR u.isActive = false)')
+      .orderBy('u.updatedAt', 'DESC')
+      .getOne();
+
+    if (previous) {
+      await this.usersRepo.update(previous.id, {
+        isActive: true,
+        deletedAt: null,
+        firstName: payload.firstName ?? previous.firstName,
+        lastName: payload.lastName ?? previous.lastName,
+        phone: payload.phone ?? previous.phone,
+        updatedBy: currentUserId ?? previous.updatedBy,
+      } as any);
+
+      await this.setFirebaseDisabled(previous.externalId, false);
+      this.eventEmitter.emit('user.access.changed', { externalId: previous.externalId });
+
+      const restored = await this.usersRepo.findOne({ where: { id: previous.id } });
+      this.logger.log(`Compte restaure au lieu d'etre recree (id=${previous.id})`);
+      return restored as User;
+    }
+
     // 1) Créer l'utilisateur Firebase d'abord (idempotent : on récupère
     //    l'existant). Si Firebase échoue, la transaction DB est rollback,
     //    évitant les comptes "zombies" sans externalId.
@@ -178,6 +210,11 @@ export class UsersService {
     let firebaseUser: admin.auth.UserRecord | null = null;
     try {
       firebaseUser = await admin.auth().getUserByEmail(payload.email);
+      // Compte Firebase existant mais desactive (ancienne suppression) :
+      // le reutiliser tel quel bloquerait le nouvel acces des sa creation.
+      if (firebaseUser?.disabled) {
+        firebaseUser = await admin.auth().updateUser(firebaseUser.uid, { disabled: false });
+      }
     } catch {
       firebaseUser = null;
     }
@@ -340,7 +377,17 @@ export class UsersService {
       throw new NotFoundException('Utilisateur introuvable dans ce contexte');
     }
 
-    return this.usersRepo.findOne({ where: scope });
+    const updated = await this.usersRepo.findOne({ where: scope });
+
+    // Desactivation / reactivation : meme effet que la suppression douce sur
+    // l'acces. Sans cela le compte restait ouvert chez Firebase et dans le
+    // cache du garde jusqu'a 5 minutes.
+    if (typeof input.isActive === 'boolean' && updated) {
+      await this.setFirebaseDisabled(updated.externalId, !input.isActive);
+      this.eventEmitter.emit('user.access.changed', { externalId: updated.externalId });
+    }
+
+    return updated;
   }
 
   /**
@@ -603,11 +650,22 @@ export class UsersService {
     return { changed: true, userId, roleId: role.id };
   }
 
+  /**
+   * Retire l'acces a la plateforme SANS rien effacer : le nom, les roles et
+   * tout l'historique (taches, validations, conges...) restent en place. Un
+   * effacement reel est impossible de toute facon — 83 cles etrangeres
+   * referencent l'utilisateur — et il ferait perdre la trace de qui a fait quoi.
+   *
+   * Le compte redevient utilisable si on le rajoute (cf. createForTenant).
+   */
   async softDeleteForTenant(
     organizationId: string,
     id: string,
     updatedBy: string | null,
   ): Promise<void> {
+    const user = await this.usersRepo.findOne({ where: { id, organizationId } });
+    if (!user) throw new NotFoundException('Utilisateur introuvable');
+
     const patch: Partial<User> = {
       isActive: false,
       deletedAt: new Date(),
@@ -616,6 +674,25 @@ export class UsersService {
       patch.updatedBy = updatedBy;
     }
     await this.usersRepo.update({ id, organizationId }, patch as any);
+
+    await this.setFirebaseDisabled(user.externalId, true);
+    this.eventEmitter.emit('user.access.changed', { externalId: user.externalId });
+  }
+
+  /**
+   * Bloque ou debloque le compte cote Firebase. Le refus en base suffit pour
+   * l'API, mais desactiver chez Firebase empeche aussi l'obtention de
+   * nouveaux jetons : la porte est fermee des deux cotes.
+   * Un echec ici ne doit pas annuler l'operation en base.
+   */
+  private async setFirebaseDisabled(externalId: string | null | undefined, disabled: boolean): Promise<void> {
+    if (!externalId) return;
+    try {
+      this.ensureFirebaseApp();
+      await admin.auth().updateUser(externalId, { disabled });
+    } catch (err) {
+      this.logger.warn(`Firebase ${disabled ? 'blocage' : 'deblocage'} echoue pour ${externalId}: ${(err as Error).message}`);
+    }
   }
 
   async restoreForTenant(
@@ -623,6 +700,9 @@ export class UsersService {
     id: string,
     updatedBy: string | null,
   ): Promise<void> {
+    const user = await this.usersRepo.findOne({ where: { id, organizationId } });
+    if (!user) throw new NotFoundException('Utilisateur introuvable');
+
     const patch: Partial<User> = {
       isActive: true,
       deletedAt: null,
@@ -631,10 +711,23 @@ export class UsersService {
       patch.updatedBy = updatedBy;
     }
     await this.usersRepo.update({ id, organizationId }, patch as any);
+
+    await this.setFirebaseDisabled(user.externalId, false);
+    this.eventEmitter.emit('user.access.changed', { externalId: user.externalId });
   }
 
-  async hardDeleteForTenant(organizationId: string, id: string): Promise<void> {
-    await this.usersRepo.delete({ id, organizationId });
+  /**
+   * Conserve pour compatibilite de la route `/hard`, mais n'efface plus rien :
+   * un DELETE echouait sur les cles etrangeres des qu'un compte avait la
+   * moindre activite, et ne supprimait de toute facon jamais le compte
+   * Firebase. On applique la suppression douce.
+   */
+  async hardDeleteForTenant(
+    organizationId: string,
+    id: string,
+    updatedBy: string | null = null,
+  ): Promise<void> {
+    await this.softDeleteForTenant(organizationId, id, updatedBy);
   }
 
   async bulkActionForTenant(

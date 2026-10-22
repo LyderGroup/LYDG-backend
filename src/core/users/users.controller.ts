@@ -308,10 +308,16 @@ export class UsersController {
   @RequirePermission(GLOBAL_PERMISSIONS.SYSTEM_ADMIN)
   async hardDelete(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
 
-    await this.usersService.hardDeleteForTenant(tenant?.id as string, id);
+    // N'efface plus rien : l'acces est retire, l'historique conserve.
+    await this.usersService.hardDeleteForTenant(
+      tenant?.id as string,
+      id,
+      currentUser?.id ?? null,
+    );
 
-    return { hardDeleted: true };
+    return { deleted: true };
   }
 
   @Post('bulk')

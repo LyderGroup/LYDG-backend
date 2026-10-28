@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
+import { PresenceModule } from './core/presence/presence.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -64,6 +65,7 @@ function buildSslConfig(configService: ConfigService, isProd: boolean) {
     // academy, hr et projects, ce qui enregistrait 3 planificateurs et
     // declenchait CHAQUE @Cron trois fois.
     ScheduleModule.forRoot(),
+    PresenceModule,
     // Rate limiting global :
     // - 30 req/sec en burst (anti-flood)
     // - 200 req/min (usage normal)

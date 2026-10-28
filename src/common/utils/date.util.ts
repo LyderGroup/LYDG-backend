@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 /**
  * Helpers de date pour les colonnes PostgreSQL de type DATE.
  *
@@ -33,7 +34,7 @@ export function toIsoDate(value?: Date | string | null): string {
 
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) {
-    throw new Error(`Date invalide: ${String(value)}`);
+    throw new BadRequestException(`Date invalide: ${String(value)}`);
   }
 
   const year = date.getUTCFullYear();

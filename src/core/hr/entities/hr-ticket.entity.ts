@@ -12,6 +12,7 @@ import { Organization } from '../../organizations/organizations.entity';
 import { Employee } from '../employee.entity';
 import { User } from '../../users/user.entity';
 import { HrTicketComment } from './hr-ticket-comment.entity';
+import { HrTicketCategory } from './hr-ticket-category.entity';
 
 export type TicketPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type TicketStatus = 
@@ -46,6 +47,12 @@ export class HrTicket {
 
   @Column({ type: 'uuid', name: 'category_id' })
   categoryId!: string;
+
+  // Charge par le service (relations: ['category']) : sans cette relation,
+  // toutes les lectures de tickets echouaient en 500.
+  @ManyToOne(() => HrTicketCategory)
+  @JoinColumn({ name: 'category_id' })
+  category?: HrTicketCategory;
 
   // Identification
   @Column({ type: 'varchar', length: 20, name: 'ticket_number', unique: true })

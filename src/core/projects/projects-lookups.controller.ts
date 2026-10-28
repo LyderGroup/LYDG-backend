@@ -184,16 +184,41 @@ export class ProjectsLookupsController {
       throw new UnauthorizedException('Missing authenticated user');
     }
 
+    // Le 4e parametre (READ_ALL_GROUP) etait passe sans etre utilise :
+    // Postgres refusait la requete, la route renvoyait toujours 500.
     const access = (await this.dataSource.query(
       `
+      WITH user_admin AS (
+        SELECT 1
+        FROM core.user_roles ur
+        JOIN core.roles r ON r.id = ur.role_id
+        JOIN core.role_permissions rp ON rp.role_id = r.id
+        JOIN core.permissions p ON p.id = rp.permission_id
+        WHERE ur.user_id = $2
+          AND ur.is_active = true
+          AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+          AND r.is_active = true
+          AND p.code = ANY($4::text[])
+          AND (r.organization_id = $3 OR r.organization_id IS NULL)
+        LIMIT 1
+      )
       SELECT 1 AS ok
       FROM module_b_projects.projects p
       LEFT JOIN module_b_projects.project_members pm
         ON pm.project_id = p.id
        AND pm.user_id = $2
+      LEFT JOIN module_b_projects.project_managers pma
+        ON pma.project_id = p.id
+       AND pma.user_id = $2
       WHERE p.id = $1
         AND p.organization_id = $3
-        AND (pm.user_id IS NOT NULL OR p.created_by = $2 OR p.manager_id = $2)
+        AND (
+          pm.user_id IS NOT NULL
+          OR pma.user_id IS NOT NULL
+          OR p.created_by = $2
+          OR p.manager_id = $2
+          OR EXISTS (SELECT 1 FROM user_admin)
+        )
       LIMIT 1
       `,
       [projectId.trim(), String(currentUser.id), String(tenant.id), READ_ALL_GROUP],

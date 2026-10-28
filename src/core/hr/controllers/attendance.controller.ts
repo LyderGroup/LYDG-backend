@@ -9,6 +9,7 @@ import {
   UseGuards,
   Req,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { AttendanceService } from '../services/attendance.service';
 import { AttendanceReminderService } from '../services/attendance-reminder.service';
@@ -228,11 +229,14 @@ export class AttendanceController {
       throw new ForbiddenException('Employé non trouvé');
     }
 
-    return this.attendanceService.getEmployeeAttendance(
-      employeeId,
-      new Date(startDate),
-      new Date(endDate),
-    );
+    // Sans ces parametres, Postgres recevait une date « NaN » : erreur 500.
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new BadRequestException('startDate et endDate sont requis (AAAA-MM-JJ)');
+    }
+
+    return this.attendanceService.getEmployeeAttendance(employeeId, start, end);
   }
 
   @Get('my/stats')
@@ -248,11 +252,13 @@ export class AttendanceController {
       throw new ForbiddenException('Employé non trouvé');
     }
 
-    return this.attendanceService.getMonthlyStats(
-      employeeId,
-      parseInt(month),
-      parseInt(year),
-    );
+    const m = parseInt(month, 10);
+    const y = parseInt(year, 10);
+    if (!(m >= 1 && m <= 12) || !(y >= 2000 && y <= 2100)) {
+      throw new BadRequestException('month (1-12) et year sont requis');
+    }
+
+    return this.attendanceService.getMonthlyStats(employeeId, m, y);
   }
 
   @Get('team/my')

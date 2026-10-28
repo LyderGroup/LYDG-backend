@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EmployeeBonus, BonusStatus } from '../entities/employee-bonus.entity';
@@ -50,13 +50,13 @@ export class BonusService {
   async approveBonus(bonusId: string, approvedBy: string, notes?: string): Promise<EmployeeBonus> {
     const bonus = await this.bonusRepo.findOne({ where: { id: bonusId } });
     if (!bonus) {
-      throw new Error('Bonus non trouvé');
+      throw new NotFoundException('Bonus non trouvé');
     }
     if (bonus.status === 'cancelled') {
-      throw new Error('Impossible d\'approuver un bonus annulé');
+      throw new BadRequestException('Impossible d\'approuver un bonus annulé');
     }
     if (bonus.status === 'approved' || bonus.status === 'paid') {
-      throw new Error('Bonus déjà approuvé');
+      throw new BadRequestException('Bonus déjà approuvé');
     }
 
     bonus.status = 'approved' as BonusStatus;
@@ -72,10 +72,10 @@ export class BonusService {
   async cancelBonus(bonusId: string, reason: string): Promise<EmployeeBonus> {
     const bonus = await this.bonusRepo.findOne({ where: { id: bonusId } });
     if (!bonus) {
-      throw new Error('Bonus non trouvé');
+      throw new NotFoundException('Bonus non trouvé');
     }
     if (bonus.status === 'paid') {
-      throw new Error('Impossible d\'annuler un bonus déjà payé');
+      throw new BadRequestException('Impossible d\'annuler un bonus déjà payé');
     }
 
     bonus.status = 'cancelled' as BonusStatus;

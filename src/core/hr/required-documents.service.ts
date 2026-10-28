@@ -331,7 +331,7 @@ export class RequiredDocumentsService {
   }[]> {
     const query = this.documentsRepo.createQueryBuilder('doc')
       .leftJoinAndSelect('doc.employee', 'employee')
-      .where('doc.status IN (:...statuses', { statuses: [DocumentStatus.PENDING, DocumentStatus.REJECTED] })
+      .where('doc.status IN (:...statuses)', { statuses: [DocumentStatus.PENDING, DocumentStatus.REJECTED] })
       .andWhere('doc.isOptional = false');
 
     if (organizationId) {
@@ -354,7 +354,7 @@ export class RequiredDocumentsService {
       if (!employeeMap.has(empId)) {
         employeeMap.set(empId, {
           employeeId: empId,
-          employeeName: doc.employee.user ? `${doc.employee.user.firstName} ${doc.employee.user.lastName}` : doc.employee.employeeNumber,
+          employeeName: [doc.employee?.firstName, doc.employee?.lastName].filter(Boolean).join(' ') || doc.employee?.employeeNumber || '—',
           missingDocuments: [],
           overdueDocuments: [],
           nearestDueDate: doc.dueDate || new Date(),

@@ -1,6 +1,7 @@
 // Organisation RH
 export { HrDepartment } from './department.entity';
 export { JobPosition } from './job-position.entity';
+export { EmployeePosition } from './employee-position.entity';
 
 // Congés
 export { LeaveType } from './leave-type.entity';

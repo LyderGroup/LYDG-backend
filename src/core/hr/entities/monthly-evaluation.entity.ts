@@ -143,6 +143,8 @@ export class MonthlyEvaluation {
   updatedAt!: Date;
 
   // Relations
-  @OneToMany('EvaluationKpiScore', 'kpiScores')
+  // L'inverse est `evaluation` cote score (et non `kpiScores`) : la mauvaise
+  // reference faisait echouer toute jointure (joinColumns undefined).
+  @OneToMany('EvaluationKpiScore', 'evaluation')
   kpiScores!: any[];
 }

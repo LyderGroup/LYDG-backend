@@ -9,7 +9,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Organization } from '../../organizations/organizations.entity';
-import { HrDepartment } from './department.entity';
+import { Department } from '../../departments/department.entity';
 import { JobPosition } from './job-position.entity';
 import { User } from '../../users/user.entity';
 
@@ -64,9 +64,9 @@ export class JobOpening {
   @Column({ type: 'uuid', name: 'department_id', nullable: true })
   departmentId!: string | null;
 
-  @ManyToOne(() => HrDepartment, { nullable: true })
+  @ManyToOne(() => Department, { nullable: true })
   @JoinColumn({ name: 'department_id' })
-  department?: HrDepartment | null;
+  department?: Department | null;
 
   @Column({ type: 'text', name: 'job_description', nullable: true })
   jobDescription!: string | null;

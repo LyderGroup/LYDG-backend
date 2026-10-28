@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { LeaveRequest, LeaveRequestStatus } from '../entities/leave-request.entity';
@@ -339,7 +339,7 @@ export class LeaveRequestService {
     }
 
     if (!leaveTypeId) {
-      throw new Error('Type de congé non trouvé');
+      throw new NotFoundException('Type de congé non trouvé');
     }
 
     const entity = this.repo.create({

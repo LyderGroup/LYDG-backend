@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import {
@@ -219,7 +219,7 @@ export class CompanyRitualService {
       where: { id: input.ritualId },
     });
     if (!ritual) {
-      throw new Error('Ritual not found');
+      throw new NotFoundException('Rituel introuvable');
     }
 
     const occurrence = this.occurrenceRepo.create({
@@ -381,7 +381,7 @@ export class CompanyRitualService {
   // Start a ritual occurrence
   async startOccurrence(occurrenceId: string): Promise<RitualOccurrence> {
     const occurrence = await this.occurrenceRepo.findOne({ where: { id: occurrenceId } });
-    if (!occurrence) throw new Error('Occurrence not found');
+    if (!occurrence) throw new NotFoundException('Occurrence introuvable');
 
     occurrence.status = RitualStatus.IN_PROGRESS;
     occurrence.actualStartTime = new Date().toTimeString().slice(0, 5);
@@ -391,7 +391,7 @@ export class CompanyRitualService {
   // Complete a ritual occurrence
   async completeOccurrence(occurrenceId: string, notes?: string): Promise<RitualOccurrence> {
     const occurrence = await this.occurrenceRepo.findOne({ where: { id: occurrenceId } });
-    if (!occurrence) throw new Error('Occurrence not found');
+    if (!occurrence) throw new NotFoundException('Occurrence introuvable');
 
     occurrence.status = RitualStatus.COMPLETED;
     occurrence.actualEndTime = new Date().toTimeString().slice(0, 5);

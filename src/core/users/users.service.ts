@@ -10,6 +10,7 @@ import { LoginHistory } from './login-history.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { Role } from '../rbac/role.entity';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PresenceService } from '../presence/presence.service';
 interface ListUsersOptions {
   page?: number;
   limit?: number;
@@ -56,6 +57,7 @@ export class UsersService {
     @InjectRepository(Role)
     private readonly rolesRepo: Repository<Role>,
     private readonly eventEmitter: EventEmitter2,
+    private readonly presence: PresenceService,
   ) { }
 
   private ensureFirebaseApp(): void {
@@ -101,7 +103,7 @@ export class UsersService {
   async findPageForTenant(
     organizationId: string,
     options: ListUsersOptions,
-  ): Promise<{ data: User[]; meta: { total: number; page: number; limit: number; pageCount: number } }> {
+  ): Promise<{ data: Array<User & { isOnline: boolean }>; meta: { total: number; page: number; limit: number; pageCount: number } }> {
     const page = options.page && options.page > 0 ? options.page : 1;
     const limitRaw = options.limit && options.limit > 0 && options.limit <= 100 ? options.limit : 20;
     const limit = limitRaw;
@@ -135,7 +137,10 @@ export class UsersService {
     const [items, total] = await qb.getManyAndCount();
 
     return {
-      data: items,
+      // `isOnline` : un onglet ouvert maintenant (socket temps reel actif).
+      // A distinguer de `lastLoginAt`, la date de la derniere ouverture de
+      // session, qui elle reste meme hors ligne.
+      data: items.map((u) => Object.assign(u, { isOnline: this.presence.isOnline(u.id) })),
       meta: {
         total,
         page,
@@ -755,7 +760,7 @@ export class UsersService {
         patch = { isActive: false };
         break;
       default:
-        throw new Error('Unsupported bulk action');
+        throw new BadRequestException('Unsupported bulk action');
     }
 
     if (updatedBy) {

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -121,7 +121,7 @@ export class OvertimeService {
       where: { id: empId, organizationId: orgId },
       relations: ['user'],
     });
-    if (!employee) throw new Error('Employé non trouvé');
+    if (!employee) throw new NotFoundException('Employé non trouvé');
 
     const { startDate, endDate } = this.getMonthBounds(year, month);
     const workDaysRaw: string[] = Array.isArray(employee.workDays) ? employee.workDays : [];

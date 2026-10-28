@@ -17,7 +17,7 @@ export class EvaluationKpiScore {
   @Column({ type: 'uuid', name: 'evaluation_id' })
   evaluationId!: string;
 
-  @ManyToOne('MonthlyEvaluation', 'evaluation', { onDelete: 'CASCADE' })
+  @ManyToOne('MonthlyEvaluation', 'kpiScores', { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'evaluation_id' })
   evaluation!: any;
 

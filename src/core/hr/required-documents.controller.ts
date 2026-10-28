@@ -150,6 +150,13 @@ export class RequiredDocumentsController {
     if (!employeeId) {
       throw new BadRequestException('Employé non trouvé');
     }
+    // Un type inconnu finissait en violation NOT NULL (500).
+    if (!Object.values(RequiredDocumentType).includes(documentType)) {
+      throw new BadRequestException('Type de document inconnu');
+    }
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new BadRequestException('La valeur est obligatoire');
+    }
 
     return this.requiredDocsService.setTextValue(employeeId, documentType, value);
   }

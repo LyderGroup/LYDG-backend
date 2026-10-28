@@ -8,6 +8,7 @@ import { Organization } from '../organizations/organizations.entity';
 import {
   HrDepartment,
   JobPosition,
+  EmployeePosition,
   LeaveType,
   LeaveBalance,
   LeaveRequest,
@@ -171,6 +172,7 @@ import { ProjectsModule } from '../projects/projects.module';
       // Organisation RH
       HrDepartment,
       JobPosition,
+      EmployeePosition,
       // Congés
       LeaveType,
       LeaveBalance,

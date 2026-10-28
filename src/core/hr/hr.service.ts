@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, DataSource, EntityManager } from 'typeorm';
 import { Employee } from './employee.entity';
@@ -8,6 +8,7 @@ import { UsersService } from '../users/users.service';
 import { LeaveDeductionHistory, DeductionAbsenceType } from './entities/leave-deduction-history.entity';
 import { InAppNotificationService } from '../notifications/in-app-notification.service';
 import { ANNUAL_LEAVE_DAYS, MAX_LEAVE_DAYS_PER_REQUEST } from './leave.constants';
+import { JobPositionService } from './services/job-position.service';
 
 interface CreateEmployeeInput {
   userId?: string | null;
@@ -129,6 +130,7 @@ export class HrService {
     private readonly dataSource: DataSource,
     private readonly usersService: UsersService,
     private readonly inAppNotificationService: InAppNotificationService,
+    private readonly jobPositionService: JobPositionService,
   ) { }
 
   // Lier les employés aux users par email (réparation)
@@ -224,9 +226,25 @@ export class HrService {
   }
 
   async findOneForTenant(organizationId: string, id: string) {
-    return this.employeesRepo.findOne({
+    const employee = await this.employeesRepo.findOne({
       where: { id, organizationId },
-      relations: ['department', 'user', 'manager', 'hrManager'],
+      relations: ['department', 'user', 'manager', 'manager.user'],
+    });
+    if (!employee) return null;
+
+    // Manager RH : jamais saisi, toujours deduit du titulaire ACTUEL du poste
+    // DRH de la filiale. hr_manager_id n'est plus lu : il n'etait rempli pour
+    // aucun collaborateur et serait devenu faux au premier changement de DRH.
+    const hrDirector = await this.jobPositionService.resolveHrDirector(organizationId);
+
+    const managerName = employee.manager
+      ? `${employee.manager.firstName ?? employee.manager.user?.firstName ?? ''} ${employee.manager.lastName ?? employee.manager.user?.lastName ?? ''}`.trim() || null
+      : null;
+
+    return Object.assign(employee, {
+      managerName,
+      hrManagerName: hrDirector?.name ?? null,
+      hrManagerEmployeeId: hrDirector?.employeeId ?? null,
     });
   }
 
@@ -236,6 +254,7 @@ export class HrService {
     createdBy: string | null,
     input: CreateEmployeeInput,
   ): Promise<Employee> {
+    await this.assertValidManager(organizationId, null, input.managerId);
     const userId = input.userId ?? null;
 
     // Un collaborateur n'a pas besoin de compte pour travailler dans
@@ -281,7 +300,7 @@ export class HrService {
         departmentId: input.departmentId ?? null,
         positionId: input.positionId ?? null,
         managerId: input.managerId ?? null,
-        hrManagerId: input.hrManagerId ?? null,
+        hrManagerId: null,
         referralEmployeeId: input.referralEmployeeId ?? null,
         employeeNumber,
         socialSecurityNumber: input.socialSecurityNumber ?? null,
@@ -344,6 +363,28 @@ export class HrService {
     }
   }
 
+  /**
+   * Le superieur direct doit etre un collaborateur ACTIF de la meme filiale,
+   * et pas la personne elle-meme. Rien ne l'empechait jusqu'ici.
+   */
+  private async assertValidManager(
+    organizationId: string,
+    employeeId: string | null,
+    managerId: string | null | undefined,
+  ): Promise<void> {
+    if (!managerId) return;
+    if (employeeId && managerId === employeeId) {
+      throw new BadRequestException('Un collaborateur ne peut pas être son propre supérieur.');
+    }
+    const manager = await this.employeesRepo.findOne({
+      where: { id: managerId, organizationId },
+      select: ['id', 'employmentStatus'] as any,
+    });
+    if (!manager) {
+      throw new BadRequestException('Supérieur direct introuvable dans cette filiale.');
+    }
+  }
+
   async updateForTenant(
     organizationId: string,
     id: string,
@@ -356,8 +397,11 @@ export class HrService {
     if (input.organizationId !== undefined) patch.organizationId = input.organizationId;
     if (input.departmentId !== undefined) patch.departmentId = input.departmentId;
     if (input.positionId !== undefined) patch.positionId = input.positionId;
-    if (input.managerId !== undefined) patch.managerId = input.managerId;
-    if (input.hrManagerId !== undefined) patch.hrManagerId = input.hrManagerId;
+    if (input.managerId !== undefined) {
+      await this.assertValidManager(organizationId, id, input.managerId);
+      patch.managerId = input.managerId;
+    }
+    // hrManagerId volontairement ignore : le Manager RH est deduit du poste DRH.
     if (input.referralEmployeeId !== undefined) patch.referralEmployeeId = input.referralEmployeeId;
     if (input.employeeNumber) patch.employeeNumber = input.employeeNumber;
     if (input.socialSecurityNumber !== undefined) patch.socialSecurityNumber = input.socialSecurityNumber;
@@ -398,27 +442,44 @@ export class HrService {
     if (input.workDays !== undefined) patch.workDays = input.workDays;
     if (input.annualLeaveDays !== undefined) patch.annualLeaveDays = input.annualLeaveDays;
 
-    console.log('[HrService] updateForTenant patch keys:', Object.keys(patch));
-    console.log('[HrService] updateForTenant patch values:', JSON.stringify(patch));
+    // Les traces precedentes ecrivaient le patch complet dans les journaux du
+    // serveur — salaire, numero de securite sociale, identifiant fiscal
+    // compris. Retirees.
 
     if (Object.keys(patch).length === 0) {
-      console.log('[HrService] updateForTenant: empty patch, skipping update');
       return this.employeesRepo.findOne({
         where: { id, organizationId },
         relations: ['department', 'user', 'manager'],
       });
     }
 
-    // Use save() instead of update() so TypeORM column transformers (simple-array) are applied
-    try {
-      const existing = await this.employeesRepo.findOne({ where: { id, organizationId } });
-      if (!existing) throw new Error('Employé non trouvé');
-      const merged = Object.assign(existing, patch);
-      const saved = await this.employeesRepo.save(merged);
-      console.log('[HrService] updateForTenant saved successfully, id:', saved.id);
-    } catch (err) {
-      console.error('[HrService] updateForTenant DB error:', err);
-      throw err;
+    // save() plutot que update() pour que les transformers TypeORM
+    // (simple-array) s'appliquent.
+    const existing = await this.employeesRepo.findOne({ where: { id, organizationId } });
+    // NotFoundException et non Error : une Error nue devenait un 500.
+    if (!existing) throw new NotFoundException('Collaborateur introuvable');
+
+    const previousStatus = existing.employmentStatus;
+    const merged = Object.assign(existing, patch);
+
+    // Fin de contrat sans date precisee : on date au jour, sinon l'historique
+    // montrerait un depart sans date.
+    if (merged.employmentStatus === 'terminated' && !merged.terminationDate) {
+      merged.terminationDate = new Date() as any;
+    }
+
+    await this.employeesRepo.save(merged);
+
+    // Un collaborateur qui part quitte ses postes : sinon un DRH parti
+    // resterait titulaire du poste. Les affectations sont closes, pas
+    // supprimees — l'historique des postes occupes reste consultable.
+    if (merged.employmentStatus === 'terminated' && previousStatus !== 'terminated') {
+      await this.dataSource.query(
+        `UPDATE module_c_rh.employee_positions
+            SET ended_at = now(), is_primary = false
+          WHERE employee_id = $1 AND ended_at IS NULL`,
+        [id],
+      );
     }
 
     return this.employeesRepo.findOne({
@@ -480,7 +541,7 @@ export class HrService {
         patch = { employmentStatus: 'suspended' };
         break;
       default:
-        throw new Error('Unsupported bulk action');
+        throw new BadRequestException('Unsupported bulk action');
     }
 
     const result = await this.employeesRepo.update(where, patch as any);
@@ -719,13 +780,16 @@ export class HrService {
     });
 
     if (!employee) {
-      throw new Error('Employé non trouvé');
+      throw new NotFoundException('Employé non trouvé');
     }
 
-    employee.workStartTime = input.workStartTime ?? null;
-    employee.workEndTime = input.workEndTime ?? null;
-    employee.workDays = input.workDays ?? [];
-    employee.annualLeaveDays = input.annualLeaveDays ?? null;
+    // Seuls les champs envoyes sont modifies. Auparavant, l'onglet Presence
+    // (qui n'envoie que les horaires) remettait a zero les jours travailles
+    // et les conges annuels du collaborateur a chaque enregistrement.
+    if (input.workStartTime !== undefined) employee.workStartTime = input.workStartTime;
+    if (input.workEndTime !== undefined) employee.workEndTime = input.workEndTime;
+    if (input.workDays !== undefined) employee.workDays = input.workDays;
+    if (input.annualLeaveDays !== undefined) employee.annualLeaveDays = input.annualLeaveDays;
 
     return this.employeesRepo.save(employee);
   }
@@ -764,7 +828,7 @@ export class HrService {
     const employee = await this.employeesRepo.findOne({
       where: { id: employeeId, organizationId },
     });
-    if (!employee) throw new Error('Employé non trouvé');
+    if (!employee) throw new NotFoundException('Employé non trouvé');
 
     const targetYear = year ?? new Date().getFullYear();
     const yearStart = `${targetYear}-01-01`;

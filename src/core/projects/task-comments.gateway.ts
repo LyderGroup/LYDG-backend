@@ -12,6 +12,7 @@ import { RbacService } from '../rbac/rbac.service';
 import { Role } from '../rbac/role.entity';
 import { UserRole } from '../rbac/user-role.entity';
 import { corsOriginCallback } from '../security/cors.config';
+import { PresenceService } from '../presence/presence.service';
 
 type AuthedSocket = Socket & {
   data: {
@@ -35,6 +36,7 @@ export class TaskCommentsGateway {
   constructor(
     private readonly configService: ConfigService,
     private readonly rbacService: RbacService,
+    private readonly presence: PresenceService,
     @InjectRepository(Organization)
     private readonly organizationsRepo: Repository<Organization>,
     @InjectRepository(User)
@@ -121,10 +123,20 @@ export class TaskCommentsGateway {
   async handleConnection(client: AuthedSocket) {
     try {
       await this.authenticate(client);
+      if (client.data.userId) this.presence.connect(client.data.userId);
     } catch (err) {
       this.logger.warn(`Auth WebSocket refusée: ${(err as Error).message}`);
       client.disconnect(true);
     }
+  }
+
+  /**
+   * Fermeture d'onglet, perte reseau (detectee par le ping socket.io en
+   * quelques dizaines de secondes) ou deconnexion : le socket ne compte plus.
+   * Il n'existait aucun gestionnaire de deconnexion, donc aucune presence.
+   */
+  handleDisconnect(client: AuthedSocket) {
+    if (client.data?.userId) this.presence.disconnect(client.data.userId);
   }
 
   @SubscribeMessage('notifications.subscribe')

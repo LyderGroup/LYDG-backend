@@ -5,13 +5,15 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
 import { JobPositionService } from '../services/job-position.service';
 import { PermissionGuard } from '../../rbac/permission.guard';
 import { RequirePermission } from '../../rbac/require-permission.decorator';
@@ -19,9 +21,16 @@ import { HR_PERMISSIONS } from '../hr.permissions';
 
 class CreateJobPositionDto {
   @IsOptional() @IsString() departmentId?: string | null;
+  @IsOptional() @IsString() name?: string | null;
   @IsString() title!: string;
-  @IsString() code!: string;
+  /** Facultatif : genere a partir du nom s'il n'est pas fourni. */
+  @IsOptional() @IsString() code?: string;
   @IsOptional() @IsString() description?: string | null;
+  @IsOptional() @IsString() responsibilities?: string | null;
+  @IsOptional() @IsBoolean() isTeamLead?: boolean;
+  @IsOptional() @IsBoolean() isDepartmentHead?: boolean;
+  @IsOptional() @IsBoolean() isProjectLead?: boolean;
+  @IsOptional() @IsBoolean() isHrDirector?: boolean;
   @IsOptional() @IsString() jobFamily?: string | null;
   @IsOptional() @IsString() jobLevel?: string | null;
   @IsOptional() @IsString() salaryGrade?: string | null;
@@ -32,15 +41,26 @@ class CreateJobPositionDto {
 
 class UpdateJobPositionDto {
   @IsOptional() @IsString() departmentId?: string | null;
+  @IsOptional() @IsString() name?: string | null;
   @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() code?: string;
   @IsOptional() @IsString() description?: string | null;
+  @IsOptional() @IsString() responsibilities?: string | null;
+  @IsOptional() @IsBoolean() isTeamLead?: boolean;
+  @IsOptional() @IsBoolean() isDepartmentHead?: boolean;
+  @IsOptional() @IsBoolean() isProjectLead?: boolean;
+  @IsOptional() @IsBoolean() isHrDirector?: boolean;
   @IsOptional() @IsString() jobFamily?: string | null;
   @IsOptional() @IsString() jobLevel?: string | null;
   @IsOptional() @IsString() salaryGrade?: string | null;
   @IsOptional() @IsNumber() minSalary?: number | null;
   @IsOptional() @IsNumber() maxSalary?: number | null;
   @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+class SetEmployeePositionsDto {
+  @IsArray() @IsUUID('4', { each: true }) positionIds!: string[];
+  @IsOptional() @IsUUID('4') primaryPositionId?: string | null;
 }
 
 @UseGuards(PermissionGuard)
@@ -61,6 +81,46 @@ export class JobPositionController {
     return this.service.findPage(tenant?.id as string, { page, limit, search, departmentId, isActive });
   }
 
+  // Routes statiques AVANT `:id`, sinon Nest y verrait un identifiant.
+
+  /** Manager RH de la filiale courante (titulaire du poste DRH), ou null. */
+  @Get('hr-director')
+  @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_READ_ALL, { moduleCode: 'module_c_rh' })
+  async hrDirector(@Req() req: any) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    return { hrDirector: await this.service.resolveHrDirector(tenant?.id as string) };
+  }
+
+  /** Postes d'un collaborateur : actuels puis historique. */
+  @Get('employee/:employeeId')
+  @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_READ_ALL, { moduleCode: 'module_c_rh' })
+  async listForEmployee(
+    @Req() req: any,
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    return this.service.listForEmployee(tenant?.id as string, employeeId);
+  }
+
+  /** Fixe les postes actuels d'un collaborateur (les retires sont clos). */
+  @Put('employee/:employeeId')
+  @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_WRITE, { moduleCode: 'module_c_rh' })
+  async setForEmployee(
+    @Req() req: any,
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Body() dto: SetEmployeePositionsDto,
+  ) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { id?: string } | undefined;
+    return this.service.setForEmployee(
+      tenant?.id as string,
+      employeeId,
+      dto.positionIds ?? [],
+      dto.primaryPositionId ?? null,
+      currentUser?.id ?? null,
+    );
+  }
+
   @Get(':id')
   @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_READ_ALL, { moduleCode: 'module_c_rh' })
   async findOne(@Req() req: any, @Param('id') id: string) {
@@ -75,20 +135,7 @@ export class JobPositionController {
   async create(@Req() req: any, @Body() dto: CreateJobPositionDto) {
     const tenant = req.tenant as { id?: string } | undefined;
     if (!dto.title?.trim()) throw new BadRequestException('Le titre est obligatoire');
-    if (!dto.code?.trim()) throw new BadRequestException('Le code est obligatoire');
-
-    return this.service.create(tenant?.id as string, {
-      departmentId: dto.departmentId ?? null,
-      title: dto.title.trim(),
-      code: dto.code.trim(),
-      description: dto.description ?? null,
-      jobFamily: dto.jobFamily ?? null,
-      jobLevel: dto.jobLevel ?? null,
-      salaryGrade: dto.salaryGrade ?? null,
-      minSalary: dto.minSalary ?? null,
-      maxSalary: dto.maxSalary ?? null,
-      isActive: dto.isActive ?? true,
-    });
+    return this.service.create(tenant?.id as string, dto);
   }
 
   @Patch(':id')

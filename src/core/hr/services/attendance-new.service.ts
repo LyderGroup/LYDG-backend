@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Attendance, AttendanceStatus } from '../entities/attendance.entity';
@@ -127,7 +127,7 @@ export class AttendanceService {
 
     const attendance = await this.findByEmployeeAndDate(employeeId, today);
     if (!attendance) {
-      throw new Error('Aucun pointage d\'entrée trouvé pour aujourd\'hui');
+      throw new BadRequestException('Aucun pointage d\'entrée trouvé pour aujourd\'hui');
     }
 
     attendance.checkOut = new Date();

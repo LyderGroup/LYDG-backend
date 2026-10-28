@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Department } from './department.entity';
@@ -216,7 +216,7 @@ export class DepartmentsService {
         patch = { isActive: false };
         break;
       default:
-        throw new Error('Unsupported bulk action');
+        throw new BadRequestException('Unsupported bulk action');
     }
 
     const result = await this.departmentsRepo.update(where, patch as any);

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, ForbiddenException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
 import { DailyJournal } from '../entities/daily-journal.entity';
@@ -270,7 +270,7 @@ export class DailyJournalService {
     });
 
     if (!journal) {
-      throw new Error('Journal non trouvé');
+      throw new NotFoundException('Journal non trouvé');
     }
 
     journal.reviewedBy = input.reviewedBy;

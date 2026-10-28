@@ -3,7 +3,9 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -87,9 +89,17 @@ export class PerformanceReviewController {
 
   @Get(':id')
   @RequirePermission([HR_PERMISSIONS.HR_EVALUATION_READ_ALL, HR_PERMISSIONS.HR_EVALUATION_READ_OWN], { moduleCode: 'module_c_rh' })
-  async findOne(@Param('id') id: string) {
+  async findOne(@Req() req: any, @Param('id') id: string) {
     const item = await this.service.findOne(id);
-    if (!item) throw new BadRequestException('Évaluation non trouvée');
+    // Ni la filiale ni le proprietaire n'etaient verifies : toute evaluation
+    // etait lisible avec la seule permission « propre evaluation ».
+    if (!item || (item.employee as any)?.organizationId !== req.tenant?.id) {
+      throw new NotFoundException('Évaluation non trouvée');
+    }
+    const codes: string[] = req.permissionCodes ?? [];
+    if (!codes.includes(HR_PERMISSIONS.HR_EVALUATION_READ_ALL) && item.employeeId !== req.user?.employeeId) {
+      throw new ForbiddenException('Accès limité à vos propres évaluations');
+    }
     return item;
   }
 

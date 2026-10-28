@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, Between, LessThanOrEqual } from 'typeorm';
 import { EmployeeSanction, WarningType, SanctionStatus } from '../entities/employee-sanction.entity';
@@ -557,13 +557,13 @@ export class AutomaticSanctionService {
   async approveSanction(sanctionId: string, approvedBy: string, notes?: string): Promise<EmployeeSanction> {
     const sanction = await this.sanctionRepo.findOne({ where: { id: sanctionId } });
     if (!sanction) {
-      throw new Error('Sanction non trouvée');
+      throw new NotFoundException('Sanction non trouvée');
     }
     if (sanction.status === 'cancelled') {
-      throw new Error('Impossible d\'approuver une sanction annulée');
+      throw new BadRequestException('Impossible d\'approuver une sanction annulée');
     }
     if (sanction.sanctionedBy) {
-      throw new Error('Sanction déjà approuvée');
+      throw new BadRequestException('Sanction déjà approuvée');
     }
 
     sanction.sanctionedBy = approvedBy;
@@ -579,7 +579,7 @@ export class AutomaticSanctionService {
   async cancelSanction(sanctionId: string, reason: string): Promise<EmployeeSanction> {
     const sanction = await this.sanctionRepo.findOne({ where: { id: sanctionId } });
     if (!sanction) {
-      throw new Error('Sanction non trouvée');
+      throw new NotFoundException('Sanction non trouvée');
     }
 
     sanction.status = 'cancelled' as SanctionStatus;

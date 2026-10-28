@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  ParseUUIDPipe,
   Query,
   UseGuards,
   Req,
@@ -82,6 +83,7 @@ export class RbacController {
     @Body() dto: AssignPermissionsDto,
   ) {
     const userId = req.user.id;
+    await this.assertRoleEditable(req, id, dto.permissionIds);
     await this.rbacManagementService.assignPermissionsToRole(id, dto.permissionIds, userId);
     return this.rbacManagementService.getRoleWithPermissions(id);
   }
@@ -90,10 +92,11 @@ export class RbacController {
   @RequirePermission(GLOBAL_PERMISSIONS.ROLE_EDIT)
   async addPermissionToRole(
     @Req() req: any,
-    @Param('roleId') roleId: string,
-    @Param('permissionId') permissionId: string,
+    @Param('roleId', ParseUUIDPipe) roleId: string,
+    @Param('permissionId', ParseUUIDPipe) permissionId: string,
   ) {
     const userId = req.user.id;
+    await this.assertRoleEditable(req, roleId, [permissionId]);
     await this.rbacManagementService.addPermissionToRole(roleId, permissionId, userId);
     return { success: true };
   }
@@ -101,11 +104,24 @@ export class RbacController {
   @Delete('roles/:roleId/permissions/:permissionId')
   @RequirePermission(GLOBAL_PERMISSIONS.ROLE_EDIT)
   async removePermissionFromRole(
-    @Param('roleId') roleId: string,
-    @Param('permissionId') permissionId: string,
+    @Req() req: any,
+    @Param('roleId', ParseUUIDPipe) roleId: string,
+    @Param('permissionId', ParseUUIDPipe) permissionId: string,
   ) {
+    await this.assertRoleEditable(req, roleId);
     await this.rbacManagementService.removePermissionFromRole(roleId, permissionId);
     return { success: true };
+  }
+
+  private assertRoleEditable(req: any, roleId: string, addedPermissionIds: string[] = []) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    return this.rbacManagementService.assertRoleEditable({
+      roleId,
+      organizationId: tenant?.id ?? req.user.organizationId,
+      actorId: req.user.id,
+      actorPermissionCodes: req.permissionCodes ?? [],
+      addedPermissionIds,
+    });
   }
 
   @Post('users/roles')

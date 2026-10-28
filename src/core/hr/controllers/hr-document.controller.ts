@@ -197,8 +197,18 @@ export class HrDocumentController {
     @Request() req: any,
     @Param('id') documentId: string,
   ) {
-    const { organizationId } = req.user;
-    return this.documentService.getDocument(organizationId, documentId);
+    const { organizationId, employeeId } = req.user;
+    const document = await this.documentService.getDocument(organizationId, documentId);
+    const codes: string[] = req.permissionCodes ?? [];
+    if (codes.includes(HR_PERMISSIONS.HR_DOCUMENTS_READ_ALL)) return document;
+
+    // Sans « tout lire » : uniquement un document qui lui est attribue, et sans
+    // la liste des autres destinataires (renvoyee jusqu'ici a tout le monde).
+    const own = (document.assignments ?? []).filter((a: any) => a.employeeId === employeeId);
+    if (!employeeId || own.length === 0) {
+      throw new ForbiddenException("Ce document ne vous est pas attribué");
+    }
+    return Object.assign(document, { assignments: own });
   }
 
   @Get(':id/stats')

@@ -203,7 +203,8 @@ export class EmployeeInitiationService {
     const sponsors = await this.employeeRepo
       .createQueryBuilder('emp')
       .innerJoin('emp.organization', 'org')
-      .leftJoin('emp.initiation', 'init')
+      // Employee n'a pas de relation `initiation` : jointure par l'entite.
+      .leftJoin(EmployeeInitiation, 'init', 'init.employee_id = emp.id AND init.deleted_at IS NULL')
       .where('org.id = :organizationId', { organizationId })
       .andWhere('(init.status = :completed OR init.id IS NULL)', {
         completed: InitiationStatus.COMPLETED,

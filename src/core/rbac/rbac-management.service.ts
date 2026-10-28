@@ -455,6 +455,66 @@ export class RbacManagementService {
     return sorted;
   }
 
+  /**
+   * Garde-fou des modifications de permissions d'un role. Sans lui, la seule
+   * permission role.edit suffisait pour modifier les roles d'une autre
+   * filiale, les roles globaux, et pour s'octroyer system.admin.
+   *
+   * - le role doit appartenir a la filiale courante, ou etre global ;
+   * - un role global ne se modifie que par un porteur de role global
+   *   (meme regle que pour son attribution, cf. assignRoleToUser) ;
+   * - system.admin ne s'ajoute que si l'on en dispose soi-meme.
+   */
+  async assertRoleEditable(input: {
+    roleId: string;
+    organizationId: string;
+    actorId: string;
+    actorPermissionCodes: string[];
+    addedPermissionIds?: string[];
+  }): Promise<Role> {
+    const role = await this.rolesRepo.findOne({
+      where: [
+        { id: input.roleId, organizationId: input.organizationId },
+        { id: input.roleId, organizationId: IsNull() },
+      ],
+    });
+    if (!role) throw new NotFoundException('Rôle non trouvé');
+
+    if (!role.organizationId && !(await this.holdsGlobalRole(input.actorId))) {
+      throw new ForbiddenException(
+        `Le rôle « ${role.name} » est global : seul un porteur de rôle global peut le modifier.`,
+      );
+    }
+
+    const added = input.addedPermissionIds ?? [];
+    if (added.length && !input.actorPermissionCodes.includes('system.admin')) {
+      const current = await this.rolePermissionsRepo.find({ where: { roleId: role.id } });
+      const currentIds = new Set(current.map((rp) => rp.permissionId));
+      const newIds = added.filter((id) => !currentIds.has(id));
+      if (newIds.length) {
+        const sensitive = await this.permissionsRepo.count({
+          where: { id: In(newIds), code: 'system.admin' },
+        });
+        if (sensitive) {
+          throw new ForbiddenException('Seul un administrateur système peut accorder system.admin.');
+        }
+      }
+    }
+    return role;
+  }
+
+  private async holdsGlobalRole(userId: string): Promise<boolean> {
+    const n = await this.userRolesRepo
+      .createQueryBuilder('ur')
+      .innerJoin('ur.role', 'r')
+      .where('ur.userId = :userId', { userId })
+      .andWhere('ur.isActive = true')
+      .andWhere('r.isActive = true')
+      .andWhere('r.organizationId IS NULL')
+      .getCount();
+    return n > 0;
+  }
+
   async assignPermissionsToRole(
     roleId: string,
     permissionIds: string[],
@@ -500,6 +560,11 @@ export class RbacManagementService {
 
     if (existing) {
       return;
+    }
+
+    // Une permission inexistante finissait en violation de cle etrangere (500).
+    if (!(await this.permissionsRepo.count({ where: { id: permissionId } }))) {
+      throw new NotFoundException('Permission non trouvée');
     }
 
     const rolePermission = this.rolePermissionsRepo.create({

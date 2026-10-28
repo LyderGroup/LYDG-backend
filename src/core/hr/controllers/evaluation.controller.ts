@@ -9,6 +9,9 @@ import {
   UseGuards,
   Req,
   ForbiddenException,
+  BadRequestException,
+  NotFoundException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { EvaluationService } from '../services/evaluation.service';
 import { PermissionGuard } from '../../rbac/permission.guard';
@@ -62,6 +65,9 @@ export class EvaluationController {
     @Body() body: { weights: Array<{ kpiId: string; weightPercent: number }> },
   ) {
     const organizationId = req.user.organizationId;
+    if (!Array.isArray(body?.weights)) {
+      throw new BadRequestException('weights doit être une liste');
+    }
     return this.evaluationService.setKpiWeights(organizationId, positionId, body.weights);
   }
 
@@ -117,13 +123,6 @@ export class EvaluationController {
     return this.evaluationService.contestEvaluation(evaluationId, body.notes);
   }
 
-  @Get(':id')
-  @RequirePermission([HR_PERMISSIONS.HR_EVALUATION_READ_ALL, HR_PERMISSIONS.HR_EVALUATION_READ_OWN], { moduleCode: 'module_c_rh' })
-  async getEvaluationDetails(@Param('id') evaluationId: string) {
-    return this.evaluationService.getEvaluationDetails(evaluationId);
-  }
-
-
   @Get('my/history')
   @RequirePermission(HR_PERMISSIONS.HR_EVALUATION_READ_OWN, { moduleCode: 'module_c_rh' })
   async getMyEvaluations(
@@ -169,11 +168,27 @@ export class EvaluationController {
     @Query('year') year: string,
   ) {
     const organizationId = req.user.organizationId;
+    const now = new Date();
 
     return this.evaluationService.getEvaluationStats(
       organizationId,
-      parseInt(month),
-      parseInt(year),
+      parseInt(month, 10) || now.getMonth() + 1,
+      parseInt(year, 10) || now.getFullYear(),
     );
+  }
+
+  // Declaree APRES `team` et `stats` : sinon Nest les prenait pour un id.
+  @Get(':id')
+  @RequirePermission([HR_PERMISSIONS.HR_EVALUATION_READ_ALL, HR_PERMISSIONS.HR_EVALUATION_READ_OWN], { moduleCode: 'module_c_rh' })
+  async getEvaluationDetails(@Req() req: any, @Param('id', ParseUUIDPipe) evaluationId: string) {
+    const evaluation = await this.evaluationService.getEvaluationDetails(evaluationId);
+    if (!evaluation || evaluation.organizationId !== req.tenant?.id) {
+      throw new NotFoundException('Évaluation non trouvée');
+    }
+    const codes: string[] = req.permissionCodes ?? [];
+    if (!codes.includes(HR_PERMISSIONS.HR_EVALUATION_READ_ALL) && evaluation.employeeId !== req.user?.employeeId) {
+      throw new ForbiddenException('Accès limité à vos propres évaluations');
+    }
+    return evaluation;
   }
 }

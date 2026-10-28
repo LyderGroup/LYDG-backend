@@ -3,8 +3,11 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
+  NotFoundException,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -61,7 +64,8 @@ class CreateEmployeeDto {
   @IsOptional() @IsString() emergencyContactWhatsapp?: string | null;
   @IsOptional() @IsString() emergencyContactEmail?: string | null;
   @IsOptional() @IsString() emergencyContactAddress?: string | null;
-  @IsOptional() @IsString() employmentStatus?: string;
+  @IsOptional() @IsIn(['active', 'suspended', 'terminated', 'on_leave', 'probation', 'inactive'])
+  employmentStatus?: string;
   @IsOptional() @IsString() hireSource?: string | null;
   @IsOptional() @IsArray() badges?: string[];
   @IsOptional() @IsString() workStartTime?: string | null;
@@ -107,7 +111,8 @@ class UpdateEmployeeDto {
   @IsOptional() @IsString() emergencyContactWhatsapp?: string | null;
   @IsOptional() @IsString() emergencyContactEmail?: string | null;
   @IsOptional() @IsString() emergencyContactAddress?: string | null;
-  @IsOptional() @IsString() employmentStatus?: string;
+  @IsOptional() @IsIn(['active', 'suspended', 'terminated', 'on_leave', 'probation', 'inactive'])
+  employmentStatus?: string;
   @IsOptional() @IsDateString() terminationDate?: string | null;
   @IsOptional() @IsString() terminationReason?: string | null;
   @IsOptional() @IsBoolean() rehireEligible?: boolean;
@@ -135,6 +140,22 @@ class UpdateEmployeeScheduleDto {
   @IsOptional() @IsArray() @IsString({ each: true }) workDays?: string[];
   @IsOptional() @IsNumber() annualLeaveDays?: number | null;
 }
+
+/** Champs qu'un collaborateur peut modifier sur sa propre fiche. */
+const SELF_EDITABLE_EMPLOYEE_FIELDS = new Set([
+  'phone',
+  'birthPlace',
+  'birthDate',
+  'maritalStatus',
+  'dependentsCount',
+  'emergencyContactName',
+  'emergencyContactFirstName',
+  'emergencyContactRelationship',
+  'emergencyContactPhone',
+  'emergencyContactWhatsapp',
+  'emergencyContactEmail',
+  'emergencyContactAddress',
+]);
 
 // DTOs déclarés AVANT la classe contrôleur : ils sont référencés dans des
 // décorateurs `@Body() dto: XYZ` qui sont évalués à l'enregistrement de la
@@ -269,18 +290,67 @@ export class HrController {
     return { employeeNumber };
   }
 
+  /**
+   * Avec la seule permission « propre fiche », l'identifiant de la route doit
+   * etre le sien. Sans ce controle, un collaborateur lisait la fiche complete
+   * (salaire, n° de securite sociale) de n'importe quel autre.
+   */
+  private assertOwnUnless(req: any, employeeId: string, broader: string[], managerId?: string | null) {
+    const codes: string[] = req.permissionCodes ?? [];
+    if (broader.some((p) => codes.includes(p))) return;
+    const own = req.user?.employeeId as string | undefined;
+    if (own && own === employeeId) return;
+    // Un manager voit ses subordonnes directs.
+    if (own && managerId && managerId === own && codes.includes(HR_PERMISSIONS.HR_EMPLOYEES_READ_TEAM)) return;
+    throw new ForbiddenException('Accès limité à votre propre fiche');
+  }
+
+  // Routes `employees/me…` declarees AVANT `employees/:id…` : sinon Nest
+  // prend « me » pour un identifiant (erreur 500).
+
+  @Get('employees/me')
+  @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_READ_OWN, { moduleCode: 'module_c_rh' })
+  async getMyEmployeeProfile(@Req() req: any) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const currentUser = req.user as { employeeId?: string } | undefined;
+    const orgId = tenant?.id;
+    if (!orgId) throw new BadRequestException('Tenant non résolu');
+    if (!currentUser?.employeeId) throw new BadRequestException('Employé non trouvé pour cet utilisateur');
+
+    return this.hrService.findOneForTenant(orgId, currentUser.employeeId);
+  }
+
+  /** Horaires de l'utilisateur courant (page « Mes parametres »). */
+  @Patch('employees/me/schedule')
+  @RequirePermission([HR_PERMISSIONS.HR_EMPLOYEES_WRITE_ALL, HR_PERMISSIONS.HR_EMPLOYEES_WRITE_OWN], { moduleCode: 'module_c_rh' })
+  async updateMySchedule(@Req() req: any, @Body() dto: UpdateEmployeeScheduleDto) {
+    const tenant = req.tenant as { id?: string } | undefined;
+    const orgId = tenant?.id;
+    if (!orgId) throw new BadRequestException('Tenant non résolu');
+    const employeeId = req.user?.employeeId as string | undefined;
+    if (!employeeId) throw new BadRequestException('Employé non trouvé pour cet utilisateur');
+
+    // Ses propres conges annuels ne se modifient pas soi-meme.
+    return this.hrService.updateScheduleForTenant(orgId, employeeId, {
+      workStartTime: dto.workStartTime,
+      workEndTime: dto.workEndTime,
+      workDays: dto.workDays,
+    });
+  }
+
   @Get('employees/:id')
   @RequirePermission([HR_PERMISSIONS.HR_EMPLOYEES_READ_ALL, HR_PERMISSIONS.HR_EMPLOYEES_READ_OWN], { moduleCode: 'module_c_rh' })
-  async findOne(@Req() req: any, @Param('id') id: string) {
+  async findOne(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
     if (!orgId) throw new BadRequestException('Tenant non résolu');
     const employee = await this.hrService.findOneForTenant(orgId, id);
 
     if (!employee) {
-      throw new BadRequestException('Employé non trouvé');
+      throw new NotFoundException('Employé non trouvé');
     }
 
+    this.assertOwnUnless(req, id, [HR_PERMISSIONS.HR_EMPLOYEES_READ_ALL], (employee as any).managerId);
     return employee;
   }
 
@@ -346,13 +416,27 @@ export class HrController {
   @RequirePermission([HR_PERMISSIONS.HR_EMPLOYEES_WRITE_ALL, HR_PERMISSIONS.HR_EMPLOYEES_WRITE_OWN], { moduleCode: 'module_c_rh' })
   async update(
     @Req() req: any,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateEmployeeDto,
   ) {
     const tenant = req.tenant as { id?: string } | undefined;
     const currentUser = req.user as { id?: string } | undefined;
     const orgId = tenant?.id;
     if (!orgId) throw new BadRequestException('Tenant non résolu');
+
+    // Sans « modifier tout », seulement sa propre fiche et ses champs
+    // personnels : un collaborateur pouvait changer le salaire, le statut ou
+    // le manager de n'importe qui, y compris les siens.
+    const codes: string[] = req.permissionCodes ?? [];
+    if (!codes.includes(HR_PERMISSIONS.HR_EMPLOYEES_WRITE_ALL)) {
+      this.assertOwnUnless(req, id, []);
+      const forbidden = Object.keys(dto).filter(
+        (k) => (dto as any)[k] !== undefined && !SELF_EDITABLE_EMPLOYEE_FIELDS.has(k),
+      );
+      if (forbidden.length) {
+        throw new ForbiddenException(`Champs non modifiables par le collaborateur : ${forbidden.join(', ')}`);
+      }
+    }
 
     return this.hrService.updateForTenant(
       orgId,
@@ -480,18 +564,6 @@ export class HrController {
     );
   }
 
-  @Get('employees/me')
-  @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_READ_OWN, { moduleCode: 'module_c_rh' })
-  async getMyEmployeeProfile(@Req() req: any) {
-    const tenant = req.tenant as { id?: string } | undefined;
-    const currentUser = req.user as { employeeId?: string } | undefined;
-    const orgId = tenant?.id;
-    if (!orgId) throw new BadRequestException('Tenant non résolu');
-    if (!currentUser?.employeeId) throw new BadRequestException('Employé non trouvé pour cet utilisateur');
-
-    return this.hrService.findOneForTenant(orgId, currentUser.employeeId);
-  }
-
   @Patch('employees/me/profile')
   @RequirePermission(HR_PERMISSIONS.HR_EMPLOYEES_WRITE_OWN, { moduleCode: 'module_c_rh' })
   async updateMyEmployeeProfile(
@@ -528,23 +600,21 @@ export class HrController {
   @RequirePermission([HR_PERMISSIONS.HR_EMPLOYEES_WRITE_ALL, HR_PERMISSIONS.HR_EMPLOYEES_WRITE_OWN], { moduleCode: 'module_c_rh' })
   async updateSchedule(
     @Req() req: any,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateEmployeeScheduleDto,
   ) {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
     if (!orgId) throw new BadRequestException('Tenant non résolu');
+    this.assertOwnUnless(req, id, [HR_PERMISSIONS.HR_EMPLOYEES_WRITE_ALL]);
 
-    return this.hrService.updateScheduleForTenant(
-      orgId,
-      id,
-      {
-        workStartTime: dto.workStartTime ?? null,
-        workEndTime: dto.workEndTime ?? null,
-        workDays: dto.workDays ?? undefined,
-        annualLeaveDays: dto.annualLeaveDays ?? null,
-      },
-    );
+    // `undefined` = champ non envoye, laisse tel quel.
+    return this.hrService.updateScheduleForTenant(orgId, id, {
+      workStartTime: dto.workStartTime,
+      workEndTime: dto.workEndTime,
+      workDays: dto.workDays,
+      annualLeaveDays: dto.annualLeaveDays,
+    });
   }
 
   @Get('employees/:id/leave-usage')
@@ -557,6 +627,7 @@ export class HrController {
     const tenant = req.tenant as { id?: string } | undefined;
     const orgId = tenant?.id;
     if (!orgId) throw new BadRequestException('Tenant non résolu');
+    this.assertOwnUnless(req, id, [HR_PERMISSIONS.HR_EMPLOYEES_READ_ALL, HR_PERMISSIONS.HR_LEAVE_READ_ALL]);
 
     return this.hrService.getLeaveUsage(
       orgId,
@@ -670,6 +741,12 @@ export class HrController {
     if (targetMonth < 1 || targetMonth > 12) {
       throw new BadRequestException('Mois invalide (1-12)');
     }
+    this.assertOwnUnless(req, id, [
+      HR_PERMISSIONS.HR_EMPLOYEES_READ_ALL,
+      HR_PERMISSIONS.HR_ATTENDANCE_MANAGE,
+      HR_PERMISSIONS.HR_ATTENDANCE_READ_ALL,
+      HR_PERMISSIONS.HR_ATTENDANCE_READ_TEAM,
+    ]);
 
     return this.overtimeService.getOvertimeForEmployee(orgId, id, targetMonth, targetYear);
   }
